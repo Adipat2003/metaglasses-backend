@@ -75,6 +75,7 @@ Supabase CLI 2.116.0. Generate a developer-only signing key, then start the stac
 the same CLI version:
 
 ```powershell
+Copy-Item supabase/signing_keys.example.json supabase/signing_keys.json
 npx --yes supabase@2.116.0 gen signing-key --algorithm ES256 --append
 npx --yes supabase@2.116.0 start
 Copy-Item .env.dev.example .env.dev
