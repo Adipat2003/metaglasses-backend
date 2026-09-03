@@ -9,11 +9,16 @@ from app.models import DisplayResponse, PairingState
 
 @dataclass
 class PairingRecord:
+    owner_id: str
     state: PairingState
     last_phone_activity: datetime
     response_id: str | None = None
     text: str | None = None
     created_at: datetime | None = None
+
+
+class PairingOwnershipError(Exception):
+    """A pairing token is already owned by another authenticated user."""
 
 
 class PairingStore:
@@ -38,26 +43,38 @@ class PairingStore:
         for token in expired:
             del self._records[token]
 
-    async def set_state(self, token: str, state: PairingState) -> None:
+    async def set_state(self, token: str, state: PairingState, owner_id: str) -> None:
         """Create or update a pairing record from a phone request."""
         async with self._lock:
             now = self._now()
             self._purge_expired(now)
             record = self._records.get(token)
             if record is None:
-                self._records[token] = PairingRecord(state=state, last_phone_activity=now)
+                self._records[token] = PairingRecord(
+                    owner_id=owner_id,
+                    state=state,
+                    last_phone_activity=now,
+                )
                 return
+            if record.owner_id != owner_id:
+                raise PairingOwnershipError
             record.state = state
             record.last_phone_activity = now
 
-    async def save_response(self, token: str, text: str) -> DisplayResponse:
+    async def save_response(self, token: str, text: str, owner_id: str) -> DisplayResponse:
         async with self._lock:
             now = self._now()
             self._purge_expired(now)
             record = self._records.get(token)
             if record is None:
-                record = PairingRecord(state="speaking", last_phone_activity=now)
+                record = PairingRecord(
+                    owner_id=owner_id,
+                    state="speaking",
+                    last_phone_activity=now,
+                )
                 self._records[token] = record
+            elif record.owner_id != owner_id:
+                raise PairingOwnershipError
 
             record.state = "speaking"
             record.last_phone_activity = now

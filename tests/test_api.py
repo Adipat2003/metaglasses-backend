@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+from app.auth import AccessTokenError, AuthenticatedUser
+from app.config import Settings
 from app.main import MAX_TRANSCRIPT_BYTES, create_app
 from app.models import ConversationMessage
 from app.service import ModelProviderError, OpenAIChatService, RateLimitedError
@@ -43,6 +45,28 @@ class FakeOpenAIClient:
         self.responses = FakeResponsesClient()
 
 
+class FakeTokenVerifier:
+    def verify(self, token: str) -> AuthenticatedUser:
+        users = {
+            "alice-token": AuthenticatedUser(id="alice", email="alice@example.test"),
+            "bob-token": AuthenticatedUser(id="bob", email="bob@example.test"),
+        }
+        try:
+            return users[token]
+        except KeyError as error:
+            raise AccessTokenError from error
+
+
+def protected_settings() -> Settings:
+    return Settings(
+        app_env="trial",
+        auth_mode="required",
+        supabase_url="https://trial-project.supabase.co",
+        supabase_jwt_audience="authenticated",
+        cors_origins=("https://trial.glance.example",),
+    )
+
+
 def test_unknown_display_token_requires_repair() -> None:
     client = TestClient(create_app(FakeChatService()))
 
@@ -64,6 +88,76 @@ def test_phone_state_registers_pairing_and_updates_display() -> None:
         "text": None,
         "state": "listening",
         "createdAt": None,
+    }
+
+
+def test_hosted_environment_requires_a_valid_bearer_token() -> None:
+    client = TestClient(
+        create_app(FakeChatService(), protected_settings(), FakeTokenVerifier())
+    )
+    payload = {"pairingToken": TOKEN, "state": "listening"}
+
+    missing = client.post("/v1/state", json=payload)
+    invalid = client.post(
+        "/v1/state",
+        json=payload,
+        headers={"Authorization": "Bearer invalid-token"},
+    )
+    valid = client.post(
+        "/v1/state",
+        json=payload,
+        headers={"Authorization": "Bearer alice-token"},
+    )
+
+    assert missing.status_code == 401
+    assert missing.headers["www-authenticate"] == "Bearer"
+    assert invalid.status_code == 401
+    assert valid.status_code == 204
+
+
+def test_openapi_marks_phone_routes_as_bearer_protected() -> None:
+    client = TestClient(
+        create_app(FakeChatService(), protected_settings(), FakeTokenVerifier())
+    )
+
+    document = client.get("/openapi.json").json()
+
+    assert document["paths"]["/v1/chat"]["post"]["security"] == [{"HTTPBearer": []}]
+    assert document["paths"]["/v1/state"]["post"]["security"] == [{"HTTPBearer": []}]
+    assert "security" not in document["paths"]["/v1/display"]["get"]
+
+
+def test_pairing_tokens_cannot_be_claimed_by_another_user() -> None:
+    client = TestClient(
+        create_app(FakeChatService(), protected_settings(), FakeTokenVerifier())
+    )
+    payload = {"pairingToken": TOKEN, "state": "listening"}
+
+    first = client.post(
+        "/v1/state",
+        json=payload,
+        headers={"Authorization": "Bearer alice-token"},
+    )
+    second = client.post(
+        "/v1/state",
+        json=payload,
+        headers={"Authorization": "Bearer bob-token"},
+    )
+
+    assert first.status_code == 204
+    assert second.status_code == 403
+
+
+def test_health_reports_local_auth_bypass() -> None:
+    client = TestClient(create_app(FakeChatService()))
+
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "environment": "local",
+        "auth": "disabled",
     }
 
 
