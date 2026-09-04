@@ -50,7 +50,7 @@ and deployment checklist.
 Local bypass is explicit in `.env.local`; no bearer token is needed:
 
 ```powershell
-cd C:\Github\fastapi-backend
+cd C:\Github\metaglasses-backend
 uv sync --all-groups
 uv run uvicorn app.main:app --reload --env-file .env.local
 ```
@@ -91,6 +91,23 @@ a Supabase secret or service-role key in the app.
 uv run ruff check .
 uv run python -m pytest
 ```
+
+## CI and container publishing
+
+GitHub Actions runs linting, tests, and a production container build for every pull
+request and every push to `main`. After validation succeeds on `main`, the workflow
+publishes immutable commit and `latest` images to GitHub Container Registry:
+
+```text
+ghcr.io/adipat2003/metaglasses-backend:latest
+ghcr.io/adipat2003/metaglasses-backend:COMMIT_SHA
+```
+
+GitHub stores and builds the image but does not run persistent web services. Deploy
+the published image to a container host and configure `APP_ENV`, `AUTH_MODE`,
+`SUPABASE_URL`, `SUPABASE_JWT_AUDIENCE`, `CORS_ORIGINS`, `OPENAI_API_KEY`, and
+optionally `OPENAI_MODEL` and `PAIRING_TTL_SECONDS` there. Run exactly one replica
+until the in-memory pairing store is replaced with a shared TTL store.
 
 ## Pairing lifecycle
 
