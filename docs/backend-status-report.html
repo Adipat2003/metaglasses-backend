@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MetaGlasses Backend: Architecture and Delivery Status</title>
+  <style>
+    :root {
+      --ink: #172033;
+      --muted: #5c667a;
+      --line: #dce2ec;
+      --panel: #f5f7fb;
+      --blue: #2f66d0;
+      --blue-dark: #173b7a;
+      --green: #16794b;
+      --amber: #a35c00;
+      --red: #a13a3a;
+    }
+
+    @page {
+      size: A4;
+      margin: 16mm 15mm 18mm;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      color: var(--ink);
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 9.5pt;
+      line-height: 1.45;
+      margin: 0;
+    }
+
+    h1, h2, h3, h4 { color: var(--blue-dark); line-height: 1.18; }
+    h1 { font-size: 29pt; margin: 0 0 10px; }
+    h2 {
+      border-bottom: 2px solid var(--blue);
+      font-size: 18pt;
+      margin: 0 0 14px;
+      padding-bottom: 6px;
+    }
+    h3 { font-size: 12.5pt; margin: 18px 0 7px; }
+    h4 { font-size: 10pt; margin: 13px 0 5px; }
+    p { margin: 5px 0 9px; }
+    ul, ol { margin: 5px 0 10px 20px; padding: 0; }
+    li { margin: 3px 0; }
+    a { color: var(--blue); text-decoration: none; }
+    code {
+      background: #eef2f8;
+      border-radius: 3px;
+      color: #1f385e;
+      font-family: Consolas, monospace;
+      font-size: 8.6pt;
+      padding: 1px 4px;
+    }
+    pre {
+      background: #101828;
+      border-radius: 7px;
+      color: #e6edf7;
+      font-family: Consolas, monospace;
+      font-size: 8pt;
+      line-height: 1.4;
+      margin: 8px 0 12px;
+      overflow-wrap: anywhere;
+      padding: 11px 13px;
+      white-space: pre-wrap;
+    }
+
+    table {
+      border-collapse: collapse;
+      margin: 8px 0 14px;
+      width: 100%;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 6px 7px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #eaf0fb; color: var(--blue-dark); font-weight: 650; }
+    tr:nth-child(even) td { background: #fafbfe; }
+
+    .cover {
+      align-items: flex-start;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 245mm;
+      page-break-after: always;
+      position: relative;
+    }
+    .cover::before {
+      background: linear-gradient(135deg, var(--blue-dark), var(--blue));
+      content: "";
+      height: 9px;
+      left: 0;
+      position: absolute;
+      top: 0;
+      width: 100%;
+    }
+    .eyebrow {
+      color: var(--blue);
+      font-size: 10pt;
+      font-weight: 700;
+      letter-spacing: 1.8px;
+      margin-bottom: 18px;
+      text-transform: uppercase;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: 15pt;
+      line-height: 1.4;
+      margin: 0 0 38px;
+      max-width: 145mm;
+    }
+    .meta {
+      border-left: 4px solid var(--blue);
+      color: var(--muted);
+      padding: 2px 0 2px 14px;
+    }
+    .meta strong { color: var(--ink); display: inline-block; min-width: 95px; }
+    .cover-note {
+      bottom: 8mm;
+      color: var(--muted);
+      font-size: 8.5pt;
+      position: absolute;
+    }
+
+    .section { page-break-before: always; }
+    .avoid-break { break-inside: avoid; }
+    .small { color: var(--muted); font-size: 8.3pt; }
+
+    .callout {
+      background: var(--panel);
+      border-left: 4px solid var(--blue);
+      border-radius: 4px;
+      margin: 10px 0 14px;
+      padding: 10px 12px;
+    }
+    .callout.good { border-left-color: var(--green); }
+    .callout.warn { border-left-color: var(--amber); }
+    .callout.risk { border-left-color: var(--red); }
+    .callout strong { display: block; margin-bottom: 3px; }
+
+    .status-grid {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(2, 1fr);
+      margin: 10px 0 14px;
+    }
+    .status-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      break-inside: avoid;
+      padding: 10px;
+    }
+    .status-card .label { color: var(--muted); font-size: 7.5pt; text-transform: uppercase; }
+    .status-card .value { font-size: 12pt; font-weight: 700; margin-top: 3px; }
+    .done { color: var(--green); }
+    .pending { color: var(--amber); }
+
+    .flow {
+      align-items: stretch;
+      display: grid;
+      gap: 6px;
+      grid-template-columns: 1fr 22px 1fr 22px 1fr;
+      margin: 14px 0;
+    }
+    .flow-box {
+      background: #edf3ff;
+      border: 1px solid #b9caea;
+      border-radius: 7px;
+      padding: 11px 9px;
+      text-align: center;
+    }
+    .flow-arrow { align-items: center; color: var(--blue); display: flex; font-size: 18pt; justify-content: center; }
+
+    .priority {
+      border-radius: 10px;
+      color: white;
+      display: inline-block;
+      font-size: 7.2pt;
+      font-weight: 700;
+      min-width: 24px;
+      padding: 2px 7px;
+      text-align: center;
+    }
+    .p0 { background: var(--red); }
+    .p1 { background: var(--amber); }
+    .p2 { background: var(--blue); }
+    .p3 { background: var(--muted); }
+
+    .toc td:first-child { width: 12mm; }
+    .checklist td:first-child { text-align: center; width: 12mm; }
+    .roadmap td:first-child { width: 15mm; }
+    .roadmap td:nth-child(2) { width: 37mm; }
+    .roadmap td:nth-child(4) { width: 29mm; }
+
+    .footer-note {
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 8pt;
+      margin-top: 18px;
+      padding-top: 7px;
+    }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="eyebrow">Engineering status report</div>
+    <h1>MetaGlasses Backend</h1>
+    <p class="subtitle">Current architecture, delivered capabilities, security posture, operational constraints, and prioritized path to production.</p>
+    <div class="meta">
+      <p><strong>Report date</strong> September 4, 2026</p>
+      <p><strong>Version</strong> 0.1.0</p>
+      <p><strong>Baseline commit</strong> a88f3ef560977977e4a97d59cf16946686f1c0c1</p>
+      <p><strong>Repository</strong> github.com/Adipat2003/metaglasses-backend</p>
+      <p><strong>Scope</strong> FastAPI backend and delivery pipeline</p>
+    </div>
+    <p class="cover-note">Prepared from the verified repository state, local runtime, automated tests, GitHub configuration, official Supabase documentation, and official OpenAI documentation.</p>
+  </section>
+
+  <section>
+    <h2>Executive summary</h2>
+    <p>The MetaGlasses backend is a functional v0.1 FastAPI service for a phone-to-lens text-assistance loop. It accepts a phone-maintained conversation transcript, asks OpenAI for one concise next step, and exposes the newest answer to a paired lens. Supabase is used strictly as the identity provider. Pairing and display state remain process-local.</p>
+
+    <div class="status-grid">
+      <div class="status-card"><div class="label">Local API</div><div class="value done">Running and healthy</div></div>
+      <div class="status-card"><div class="label">Automated tests</div><div class="value done">20 passing</div></div>
+      <div class="status-card"><div class="label">GitHub CI/CD</div><div class="value done">Passing</div></div>
+      <div class="status-card"><div class="label">Production image</div><div class="value done">Published to GHCR</div></div>
+      <div class="status-card"><div class="label">Hosted backend</div><div class="value pending">Not deployed</div></div>
+      <div class="status-card"><div class="label">Hosted Supabase projects</div><div class="value pending">Placeholders only</div></div>
+    </div>
+
+    <div class="callout good">
+      <strong>What is ready</strong>
+      The API contract, local runtime, JWT verification, OpenAI request path, error mapping, in-memory pairing flow, container image, GitHub validation, container publishing, and protected main branch are operational.
+    </div>
+    <div class="callout risk">
+      <strong>Primary production blocker</strong>
+      There is no persistent hosting target, no real trial or production configuration, and pairing state is lost on process restart. A single replica is mandatory until state moves to a shared TTL store.
+    </div>
+
+    <h3>Contents</h3>
+    <table class="toc">
+      <tr><td>1</td><td>System purpose and architecture</td></tr>
+      <tr><td>2</td><td>API contract and request lifecycle</td></tr>
+      <tr><td>3</td><td>Supabase authentication</td></tr>
+      <tr><td>4</td><td>OpenAI model integration</td></tr>
+      <tr><td>5</td><td>Pairing state and data lifecycle</td></tr>
+      <tr><td>6</td><td>Configuration and environments</td></tr>
+      <tr><td>7</td><td>Container, GitHub CI/CD, and repository controls</td></tr>
+      <tr><td>8</td><td>Testing and quality status</td></tr>
+      <tr><td>9</td><td>Security assessment</td></tr>
+      <tr><td>10</td><td>Remaining work and production roadmap</td></tr>
+    </table>
+
+  </section>
+
+  <section class="section">
+    <h2>1. System purpose and architecture</h2>
+    <p>The service supports a deliberately narrow interaction model. A phone owns conversation history and voice interaction, while the lens receives only short text and a simple activity state. The backend is the trust boundary between authenticated phone traffic, the OpenAI model provider, and unauthenticated lens polling.</p>
+
+    <div class="flow avoid-break">
+      <div class="flow-box"><strong>Mobile phone</strong><br>Supabase sign-in<br>Transcript and state</div>
+      <div class="flow-arrow">&#8594;</div>
+      <div class="flow-box"><strong>FastAPI</strong><br>JWT validation<br>Pairing ownership<br>Model orchestration</div>
+      <div class="flow-arrow">&#8594;</div>
+      <div class="flow-box"><strong>OpenAI</strong><br>Responses API<br>One short text step</div>
+    </div>
+    <div class="flow avoid-break">
+      <div class="flow-box"><strong>Lens client</strong><br>Poll by pairing token</div>
+      <div class="flow-arrow">&#8594;</div>
+      <div class="flow-box"><strong>Display endpoint</strong><br>Newest response and state</div>
+      <div class="flow-arrow">&#8594;</div>
+      <div class="flow-box"><strong>Memory store</strong><br>One process<br>One-hour TTL</div>
+    </div>
+
+    <h3>Component map</h3>
+    <table>
+      <thead><tr><th>Component</th><th>Responsibility</th><th>Implementation</th></tr></thead>
+      <tbody>
+        <tr><td><code>app/main.py</code></td><td>Application factory, middleware, routes, status-code mapping, dependency composition</td><td>FastAPI</td></tr>
+        <tr><td><code>app/models.py</code></td><td>Request and response validation, API naming aliases, state vocabulary</td><td>Pydantic</td></tr>
+        <tr><td><code>app/auth.py</code></td><td>Bearer extraction and Supabase access-token verification</td><td>PyJWT and remote JWKS</td></tr>
+        <tr><td><code>app/service.py</code></td><td>Prompt policy and OpenAI Responses API call</td><td>Async OpenAI SDK</td></tr>
+        <tr><td><code>app/store.py</code></td><td>Pairing ownership, state changes, expiration, newest display response</td><td>Async in-memory dictionary</td></tr>
+        <tr><td><code>app/config.py</code></td><td>Environment parsing and unsafe-configuration rejection</td><td>Typed dataclass</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Explicit scope boundaries</h3>
+    <ul>
+      <li>The backend does not accept, store, or return audio.</li>
+      <li>The backend does not retain the conversation transcript.</li>
+      <li>The backend does not expose login, signup, or refresh-token endpoints.</li>
+      <li>The backend does not use Supabase Postgres, Storage, Realtime, or service-role credentials.</li>
+      <li>The backend does not currently integrate NVIDIA APIs or the previously supplied NVIDIA example.</li>
+      <li>The backend returns one complete text response rather than streaming partial output.</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <h2>2. API contract and request lifecycle</h2>
+    <h3>Endpoint summary</h3>
+    <table>
+      <thead><tr><th>Method and path</th><th>Authentication</th><th>Purpose</th><th>Main responses</th></tr></thead>
+      <tbody>
+        <tr><td><code>GET /healthz</code></td><td>None</td><td>Reports process status, selected environment, and auth mode</td><td>200</td></tr>
+        <tr><td><code>POST /v1/state</code></td><td>Supabase bearer token outside local mode</td><td>Registers a pairing or changes lens state</td><td>204, 401, 403, 422</td></tr>
+        <tr><td><code>POST /v1/chat</code></td><td>Supabase bearer token outside local mode</td><td>Generates and caches the next display instruction</td><td>200, 401, 403, 413, 422, 429, 503</td></tr>
+        <tr><td><code>GET /v1/display?token=...</code></td><td>Pairing-token capability</td><td>Returns newest text and current state to the lens</td><td>200, 401, 422</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Interactive Swagger documentation</h3>
+    <p>Swagger UI is available at <code>/docs</code>, ReDoc is available at <code>/redoc</code>, and the machine-readable OpenAPI document is available at <code>/openapi.json</code>. All four endpoints appear in the schema.</p>
+    <ul>
+      <li><strong>System</strong> contains process health and runtime-mode visibility.</li>
+      <li><strong>Phone</strong> contains authenticated chat and state operations.</li>
+      <li><strong>Lens</strong> contains capability-protected display polling.</li>
+      <li>Every operation has a stable operation ID, summary, detailed description, and response description.</li>
+      <li>Request and response fields include human-readable descriptions and representative examples.</li>
+      <li>Application-level 401, 403, 413, 429, and 503 responses are documented with a shared error schema.</li>
+      <li>The authorization dialog identifies the credential as a Supabase bearer access token.</li>
+      <li>Filtering, alphabetical tag sorting, method sorting, request duration, and authorization persistence are enabled.</li>
+    </ul>
+
+    <h3>Input validation</h3>
+    <ul>
+      <li>A pairing token must contain exactly 32 hexadecimal characters, providing 128 bits when generated randomly.</li>
+      <li>A chat request must contain at least one message.</li>
+      <li>Message roles are limited to <code>user</code> and <code>assistant</code>.</li>
+      <li>Message text cannot be empty or whitespace-only.</li>
+      <li>The serialized transcript cannot exceed 256,000 UTF-8 bytes.</li>
+      <li>State must be <code>idle</code>, <code>listening</code>, <code>thinking</code>, or <code>speaking</code>.</li>
+      <li>External JSON uses camelCase while Python uses snake_case.</li>
+    </ul>
+
+    <h3>Chat sequence</h3>
+    <ol>
+      <li>FastAPI and Pydantic validate the bearer header, pairing token, messages, and transcript size.</li>
+      <li>The store registers or verifies pairing ownership and changes the state to <code>thinking</code>.</li>
+      <li>The chat service submits the entire supplied transcript and fixed system instruction to OpenAI.</li>
+      <li>A provider rate limit becomes HTTP 429. A missing key, API error, or empty model output becomes HTTP 503.</li>
+      <li>On provider failure, the state returns to <code>idle</code>.</li>
+      <li>On success, a new response ID and UTC timestamp are created, the state becomes <code>speaking</code>, and the newest text is saved.</li>
+      <li>The API returns that response to the phone. The lens receives the same value on its next poll.</li>
+    </ol>
+
+    <h3>Representative payloads</h3>
+    <pre>POST /v1/chat
+Authorization: Bearer &lt;supabase-access-token&gt;
+Content-Type: application/json
+
+{
+  "pairingToken": "a3f9d1e2c3b4a5f60718293a4b5c6d7e",
+  "messages": [
+    {"role": "user", "content": "How do I change a bike tire?"}
+  ]
+}</pre>
+    <pre>{
+  "responseId": "r_&lt;random-uuid&gt;",
+  "text": "Use your tire levers to lift one side of the tire bead over the rim.",
+  "createdAt": "2026-09-04T18:00:00Z"
+}</pre>
+
+    <div class="callout warn">
+      <strong>Capability endpoint</strong>
+      <code>/v1/display</code> is intentionally not protected by Supabase. Knowledge of the random pairing token grants read access to its latest display state. Because the token is a URL query parameter, infrastructure logs and browser history must be treated carefully.
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>3. Supabase authentication</h2>
+    <h3>Delivered behavior</h3>
+    <p>The mobile client is expected to authenticate directly with Supabase. It sends the current access token to protected FastAPI routes. The backend uses the configured Supabase URL to retrieve public signing keys and verifies tokens locally. The official Supabase JWT guide documents the project JWKS endpoint and recommends established JWT libraries for verification.</p>
+
+    <table>
+      <thead><tr><th>JWT control</th><th>Current enforcement</th></tr></thead>
+      <tbody>
+        <tr><td>Signature</td><td>ES256 or RS256 only</td></tr>
+        <tr><td>Issuer</td><td><code>{SUPABASE_URL}/auth/v1</code></td></tr>
+        <tr><td>Audience</td><td><code>authenticated</code> by default, configurable</td></tr>
+        <tr><td>Required claims</td><td><code>exp</code>, <code>iat</code>, and <code>sub</code></td></tr>
+        <tr><td>Role</td><td>Must equal <code>authenticated</code></td></tr>
+        <tr><td>User identity</td><td>JWT subject, with optional email claim</td></tr>
+        <tr><td>Key caching</td><td>Public JWKS cached for 600 seconds</td></tr>
+        <tr><td>Unauthorized response</td><td>401 with <code>WWW-Authenticate: Bearer</code></td></tr>
+      </tbody>
+    </table>
+
+    <h3>Security choices already made</h3>
+    <ul>
+      <li>No user password enters FastAPI.</li>
+      <li>No secret or service-role Supabase key is needed by FastAPI.</li>
+      <li>Legacy shared-secret HS256 tokens are deliberately rejected.</li>
+      <li>Authentication bypass is allowed only with <code>APP_ENV=local</code>.</li>
+      <li>Trial and production require HTTPS Supabase URLs.</li>
+      <li>The first authenticated user to register a pairing token owns it until expiration.</li>
+      <li>User-editable metadata is not used for authorization decisions.</li>
+    </ul>
+
+    <h3>Local Supabase stack</h3>
+    <table>
+      <thead><tr><th>Service</th><th>Location</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td>API and Auth</td><td><code>http://127.0.0.1:54321</code></td><td>Development authentication</td></tr>
+        <tr><td>Postgres</td><td>Port 54322</td><td>Available locally but unused by this application</td></tr>
+        <tr><td>Studio</td><td>Port 54323</td><td>Local administration UI</td></tr>
+        <tr><td>Email viewer</td><td>Port 54324</td><td>Captures local authentication email</td></tr>
+      </tbody>
+    </table>
+
+    <p>Email signup and refresh-token rotation are enabled locally. Email confirmation is disabled locally, anonymous sign-in is disabled, JWT lifetime is one hour, and the native callback is <code>glance-dev://auth/callback</code>. Each developer generates an ignored ES256 signing-key file.</p>
+
+    <h3>Not yet completed</h3>
+    <ul>
+      <li>The trial and production project references remain placeholders.</li>
+      <li>Hosted redirect allowlists, site URLs, provider settings, and email policies are not verified.</li>
+      <li>The mobile sign-in, Keychain storage, refresh flow, and deep-link handling are outside this repository and remain integration work.</li>
+      <li>There is no live Supabase token integration test in CI.</li>
+      <li>Immediate session revocation is not checked against Supabase on each API request.</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <h2>4. OpenAI model integration</h2>
+    <h3>Delivered request configuration</h3>
+    <table>
+      <thead><tr><th>Setting</th><th>Current value</th><th>Intent</th></tr></thead>
+      <tbody>
+        <tr><td>API</td><td>Responses API</td><td>Modern OpenAI response interface</td></tr>
+        <tr><td>Client</td><td><code>openai.AsyncOpenAI</code></td><td>Non-blocking route execution</td></tr>
+        <tr><td>Default model</td><td><code>gpt-5.6-sol</code></td><td>High-quality instruction generation</td></tr>
+        <tr><td>Reasoning</td><td><code>low</code></td><td>Favor response latency for one-step guidance</td></tr>
+        <tr><td>Output budget</td><td>160 tokens</td><td>Constrain lens output</td></tr>
+        <tr><td>Response storage</td><td><code>false</code></td><td>Do not retain responses for later API retrieval</td></tr>
+        <tr><td>Prompt cache key</td><td><code>metaglasses-v1</code></td><td>Improve reuse for common prompt prefixes</td></tr>
+        <tr><td>Safety identifier</td><td>SHA-256 hash of pairing token</td><td>Stable pseudonymous identifier without sending raw token</td></tr>
+      </tbody>
+    </table>
+
+    <p>Official OpenAI documentation confirms that GPT-5.6 Sol supports the Responses API, text input and output, image input, streaming, structured output, and reasoning efforts including low. The application currently uses only text input and complete text output.</p>
+
+    <h3>Prompt policy</h3>
+    <p>The fixed instruction defines the assistant as a step-by-step voice assistant and requires exactly one practical next step in one short plain-text sentence. Markdown, preambles, and follow-up questions are discouraged except when safety requires clarification.</p>
+
+    <h3>Data behavior</h3>
+    <ul>
+      <li>The phone supplies the complete conversation history on each chat request.</li>
+      <li>The backend forwards that supplied transcript to OpenAI.</li>
+      <li>The backend does not write the transcript to its own store.</li>
+      <li>The raw pairing token is hashed before use as the safety identifier.</li>
+      <li>The generated response is stored only in process memory for lens retrieval.</li>
+    </ul>
+
+    <h3>Provider failure mapping</h3>
+    <table>
+      <thead><tr><th>Condition</th><th>Backend result</th></tr></thead>
+      <tbody>
+        <tr><td><code>OPENAI_API_KEY</code> missing</td><td>503 Model provider unavailable</td></tr>
+        <tr><td>OpenAI rate limit</td><td>429 with retry guidance</td></tr>
+        <tr><td>Other OpenAI API error</td><td>503</td></tr>
+        <tr><td>Empty model output</td><td>503</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout warn">
+      <strong>Current local limitation</strong>
+      The local environment has no OpenAI key configured. Health and pairing endpoints work, but a real local chat request returns HTTP 503 until a valid key is supplied outside version control.
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>5. Pairing state and data lifecycle</h2>
+    <p>The store is an asynchronous, process-local dictionary protected by one lock. It is sufficient for deterministic v0.1 behavior and unit testing, but it is not a durable or horizontally scalable storage layer.</p>
+
+    <h3>Pairing record</h3>
+    <table>
+      <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>owner_id</code></td><td>Authenticated Supabase user subject that claimed the pairing</td></tr>
+        <tr><td><code>state</code></td><td>Current lens state</td></tr>
+        <tr><td><code>last_phone_activity</code></td><td>UTC time used for expiration</td></tr>
+        <tr><td><code>response_id</code></td><td>Random UUID-based identifier prefixed with <code>r_</code></td></tr>
+        <tr><td><code>text</code></td><td>Newest generated answer only</td></tr>
+        <tr><td><code>created_at</code></td><td>UTC creation time of newest answer</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Expiration and ownership</h3>
+    <ul>
+      <li>Default time to live is 3,600 seconds.</li>
+      <li>Expired records are removed lazily when another store operation occurs.</li>
+      <li>A new phone request refreshes the activity time.</li>
+      <li>A different user attempting to use an active pairing token receives HTTP 403.</li>
+      <li>An unknown or expired display token receives HTTP 401 and should trigger re-pairing.</li>
+    </ul>
+
+    <h3>Operational consequences</h3>
+    <div class="callout risk">
+      <strong>Single-process constraint</strong>
+      Restarting or redeploying the service deletes every pairing. Multiple replicas would hold different records, so the phone and lens could observe inconsistent state. Production must run one replica until a shared TTL store is introduced.
+    </div>
+    <p>The present design also has no durable audit trail, historical conversation store, user profile store, or analytics store. This is intentional for v0.1, but must be reflected in product expectations and deployment settings.</p>
+  </section>
+
+  <section class="section">
+    <h2>6. Configuration and environments</h2>
+    <h3>Environment variables</h3>
+    <table>
+      <thead><tr><th>Variable</th><th>Required when</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>APP_ENV</code></td><td>Always</td><td>Selects local, dev, trial, or prod</td></tr>
+        <tr><td><code>AUTH_MODE</code></td><td>Defaults to required</td><td>Allows required or disabled authentication</td></tr>
+        <tr><td><code>SUPABASE_URL</code></td><td>Authentication required</td><td>Defines issuer and public JWKS host</td></tr>
+        <tr><td><code>SUPABASE_JWT_AUDIENCE</code></td><td>Optional</td><td>Defaults to authenticated</td></tr>
+        <tr><td><code>CORS_ORIGINS</code></td><td>Always</td><td>Comma-separated client origin allowlist</td></tr>
+        <tr><td><code>OPENAI_API_KEY</code></td><td>Real chat requests</td><td>Server-side OpenAI credential</td></tr>
+        <tr><td><code>OPENAI_MODEL</code></td><td>Optional</td><td>Defaults to GPT-5.6 Sol</td></tr>
+        <tr><td><code>PAIRING_TTL_SECONDS</code></td><td>Optional</td><td>Defaults to 3,600 seconds</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Environment matrix</h3>
+    <table>
+      <thead><tr><th>Environment</th><th>Authentication</th><th>Supabase</th><th>Backend location</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Local</td><td>Disabled explicitly</td><td>None</td><td><code>http://127.0.0.1:8000</code></td><td>Running now</td></tr>
+        <tr><td>Dev</td><td>Required</td><td>Local CLI at <code>127.0.0.1:54321</code></td><td>Not deployed</td><td>Template available</td></tr>
+        <tr><td>Trial</td><td>Required</td><td>Hosted project placeholder</td><td>Not deployed</td><td>Not configured</td></tr>
+        <tr><td>Prod</td><td>Required</td><td>Hosted project placeholder</td><td>Not deployed</td><td>Not configured</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Configuration guardrails</h3>
+    <ul>
+      <li><code>APP_ENV</code> must be selected explicitly.</li>
+      <li>Authentication cannot be disabled in dev, trial, or prod.</li>
+      <li>A Supabase URL is mandatory when authentication is required.</li>
+      <li>Supabase URLs must be absolute HTTP or HTTPS URLs.</li>
+      <li>Trial and production require HTTPS.</li>
+      <li>CORS must contain at least one origin.</li>
+      <li>Trial and production reject wildcard CORS.</li>
+    </ul>
+
+    <h3>CORS policy</h3>
+    <p>The application allows GET and POST requests with Authorization and Content-Type headers. Cookie credentials are disabled. Local mode accepts all origins, while hosted environments require explicit origins.</p>
+  </section>
+
+  <section class="section">
+    <h2>7. Container, GitHub CI/CD, and repository controls</h2>
+    <h3>Production container</h3>
+    <ul>
+      <li>Uses Python 3.12 slim.</li>
+      <li>Copies uv 0.12.9 from the official uv image.</li>
+      <li>Installs the frozen lockfile without development dependencies.</li>
+      <li>Runs under a non-root system user.</li>
+      <li>Exposes port 8000.</li>
+      <li>Checks <code>/healthz</code> every 30 seconds.</li>
+      <li>Starts Uvicorn on <code>0.0.0.0:8000</code>.</li>
+      <li>Excludes Git data, environments, caches, tests, docs, and Supabase development files from the build context.</li>
+    </ul>
+
+    <h3>GitHub Actions validation</h3>
+    <p>The workflow runs for pull requests into main, pushes to main, and manual dispatch. Older work on the same ref is cancelled through concurrency control.</p>
+    <ol>
+      <li>Check out the repository using a commit-pinned action.</li>
+      <li>Install Python 3.12.</li>
+      <li>Install uv 0.12.9 with dependency caching.</li>
+      <li>Install all locked development dependencies.</li>
+      <li>Run Ruff.</li>
+      <li>Run all pytest tests.</li>
+      <li>Build the production Docker image.</li>
+    </ol>
+
+    <h3>Container publishing</h3>
+    <p>After validation succeeds on main, a dependent job signs in to GitHub Container Registry with the temporary workflow token and publishes:</p>
+    <pre>ghcr.io/adipat2003/metaglasses-backend:latest
+ghcr.io/adipat2003/metaglasses-backend:&lt;full-git-commit-sha&gt;</pre>
+    <p>BuildKit layer caching is stored in GitHub Actions. Pulling a private package from a hosting provider will require registry credentials unless package visibility is changed.</p>
+
+    <h3>Repository governance</h3>
+    <table>
+      <thead><tr><th>Control</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Repository visibility</td><td>Public</td></tr>
+        <tr><td>Default branch</td><td>Main</td></tr>
+        <tr><td>Pull requests required</td><td>Yes</td></tr>
+        <tr><td>Required status check</td><td>Validate</td></tr>
+        <tr><td>Strict up-to-date check</td><td>Yes</td></tr>
+        <tr><td>Administrator enforcement</td><td>Yes</td></tr>
+        <tr><td>Linear history</td><td>Required</td></tr>
+        <tr><td>Conversation resolution</td><td>Required</td></tr>
+        <tr><td>Force pushes</td><td>Disabled</td></tr>
+        <tr><td>Branch deletion</td><td>Disabled</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout warn">
+      <strong>Deployment distinction</strong>
+      GitHub builds and stores the deployable image, but it does not currently run the FastAPI service. GitHub Pages cannot host a Python process. A container runtime such as a managed container platform, virtual machine, or self-managed server is still required.
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>8. Testing and quality status</h2>
+    <h3>Verified results</h3>
+    <div class="status-grid">
+      <div class="status-card"><div class="label">Ruff</div><div class="value done">Passed</div></div>
+      <div class="status-card"><div class="label">Pytest</div><div class="value done">20 passed</div></div>
+      <div class="status-card"><div class="label">GitHub Docker build</div><div class="value done">Passed</div></div>
+      <div class="status-card"><div class="label">Live local health</div><div class="value done">HTTP 200</div></div>
+    </div>
+
+    <h3>Covered behavior</h3>
+    <ul>
+      <li>Unknown display tokens and re-pair response.</li>
+      <li>Phone state registration and display propagation.</li>
+      <li>Missing, invalid, and accepted bearer credentials.</li>
+      <li>OpenAPI security declarations.</li>
+      <li>Cross-user pairing ownership rejection.</li>
+      <li>Local health and auth-bypass reporting.</li>
+      <li>Chat generation and lens response consistency.</li>
+      <li>Transcript byte-size enforcement.</li>
+      <li>Rate-limit and provider-failure status mapping.</li>
+      <li>OpenAI model, reasoning, and response-storage options.</li>
+      <li>Environment, CORS, Supabase URL, and HTTPS validation.</li>
+    </ul>
+
+    <h3>Testing gaps</h3>
+    <ul>
+      <li>No real Supabase login and JWT smoke test.</li>
+      <li>No real OpenAI request in CI.</li>
+      <li>No end-to-end phone-to-lens test.</li>
+      <li>No concurrency or load testing.</li>
+      <li>No coverage threshold or coverage report.</li>
+      <li>No static type checker.</li>
+      <li>No dependency or container vulnerability scan.</li>
+      <li>No deployment health gate or rollback exercise.</li>
+    </ul>
+    <p>Two non-failing dependency deprecation warnings currently originate from Starlette TestClient and its HTTPX/AnyIO integration. They should be tracked before future dependency upgrades.</p>
+  </section>
+
+  <section class="section">
+    <h2>9. Security assessment</h2>
+    <h3>Strengths</h3>
+    <table>
+      <thead><tr><th>Area</th><th>Control</th></tr></thead>
+      <tbody>
+        <tr><td>Secrets</td><td>Real environment files and generated signing keys are ignored; no service-role key is needed.</td></tr>
+        <tr><td>Identity</td><td>Asymmetric JWT verification checks issuer, audience, lifetime, subject, and role.</td></tr>
+        <tr><td>Authorization</td><td>Pairing ownership prevents a second authenticated user from reusing an active token.</td></tr>
+        <tr><td>Hosted configuration</td><td>Authentication bypass and wildcard CORS are rejected outside safe environments.</td></tr>
+        <tr><td>Provider privacy</td><td>OpenAI response storage is disabled and pairing identifiers are hashed.</td></tr>
+        <tr><td>Container</td><td>Runs as non-root with production dependencies only.</td></tr>
+        <tr><td>Supply chain</td><td>Python lockfile is committed and GitHub Actions are pinned to full commits.</td></tr>
+        <tr><td>Source control</td><td>Main is protected from direct unvalidated history changes.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Risks and recommended controls</h3>
+    <table>
+      <thead><tr><th>Risk</th><th>Impact</th><th>Recommended response</th></tr></thead>
+      <tbody>
+        <tr><td>Pairing token in query string</td><td>Token may enter logs or history</td><td>Redact query parameters in infrastructure logs; consider a path/header protocol in a later client version.</td></tr>
+        <tr><td>No application rate limiting</td><td>Cost abuse and provider exhaustion</td><td>Add per-user and per-IP limits before public launch.</td></tr>
+        <tr><td>In-memory state</td><td>Loss on deploy and incorrect multi-replica behavior</td><td>Use a shared TTL store or enforce one replica with explicit operational monitoring.</td></tr>
+        <tr><td>Health endpoint is shallow</td><td>Process can be healthy while dependencies fail</td><td>Keep liveness shallow; add a separate readiness endpoint for required dependencies.</td></tr>
+        <tr><td>No centralized observability</td><td>Slow detection and diagnosis</td><td>Add structured logs, request IDs, metrics, alerting, and error reporting.</td></tr>
+        <tr><td>No automated vulnerability scan</td><td>Known dependency or image flaws may go unnoticed</td><td>Add dependency review, secret scanning verification, and container scanning.</td></tr>
+        <tr><td>Access tokens remain valid until expiry</td><td>Deleted or revoked users may retain short-lived access</td><td>Keep token lifetimes appropriate; add session checks only for operations requiring immediate revocation.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section">
+    <h2>10. Remaining work and production roadmap</h2>
+    <p>Priorities below separate launch blockers from scalability and product enhancements. P0 is required before a credible public production launch. P1 is strongly recommended for an external trial. P2 and P3 improve resilience, maintainability, and product capability.</p>
+
+    <table class="roadmap">
+      <thead><tr><th>Priority</th><th>Work item</th><th>Required outcome</th><th>Verification</th></tr></thead>
+      <tbody>
+        <tr><td><span class="priority p0">P0</span></td><td>Select a runtime host</td><td>One persistent container instance with HTTPS and stable public URL</td><td>Public health request returns 200</td></tr>
+        <tr><td><span class="priority p0">P0</span></td><td>Create trial Supabase project</td><td>Real URL, ES256 signing key, email policy, site URL, and redirect allowlist</td><td>Real trial JWT accepted</td></tr>
+        <tr><td><span class="priority p0">P0</span></td><td>Configure hosted secrets</td><td>APP_ENV, AUTH_MODE, Supabase URL, CORS, OpenAI key, model, and TTL stored by host</td><td>No secret in image or repository</td></tr>
+        <tr><td><span class="priority p0">P0</span></td><td>Add deployment job</td><td>Successful main build deploys immutable image to trial</td><td>Deployment status and health gate pass</td></tr>
+        <tr><td><span class="priority p0">P0</span></td><td>Connect mobile auth</td><td>Direct Supabase sign-in, secure refresh-token storage, refresh, and bearer injection</td><td>Device end-to-end test passes</td></tr>
+        <tr><td><span class="priority p0">P0</span></td><td>Protect pairing capability</td><td>Random generation, secure transfer, log redaction, and expiry behavior documented</td><td>Logs contain no full token</td></tr>
+        <tr><td><span class="priority p1">P1</span></td><td>Add rate limiting</td><td>Per-user and per-IP budgets around chat requests</td><td>Deterministic 429 tests</td></tr>
+        <tr><td><span class="priority p1">P1</span></td><td>Add observability</td><td>Structured logs, request IDs, latency, error rate, provider failures, alerts</td><td>Dashboard and alert test</td></tr>
+        <tr><td><span class="priority p1">P1</span></td><td>Add live integration checks</td><td>Controlled Supabase JWT and OpenAI smoke tests outside pull requests</td><td>Scheduled workflow passes</td></tr>
+        <tr><td><span class="priority p1">P1</span></td><td>Define rollback</td><td>Immutable image deployment and documented rollback command</td><td>Rollback drill passes</td></tr>
+        <tr><td><span class="priority p1">P1</span></td><td>Harden CI</td><td>Coverage threshold, type checking, dependency review, and image scan</td><td>Required checks enforced</td></tr>
+        <tr><td><span class="priority p2">P2</span></td><td>Shared pairing store</td><td>Durable or ephemeral shared TTL state with atomic ownership operations</td><td>Multi-replica test passes</td></tr>
+        <tr><td><span class="priority p2">P2</span></td><td>Readiness and shutdown</td><td>Dependency readiness, graceful shutdown, and deployment drain behavior</td><td>Failure-mode test passes</td></tr>
+        <tr><td><span class="priority p2">P2</span></td><td>Load and cost testing</td><td>Latency, throughput, memory, and OpenAI cost envelope documented</td><td>Target service levels met</td></tr>
+        <tr><td><span class="priority p3">P3</span></td><td>Streaming</td><td>Optional partial-response delivery if product latency requires it</td><td>Client compatibility test</td></tr>
+        <tr><td><span class="priority p3">P3</span></td><td>Multimodal input</td><td>Explicit image or audio contract if product requirements expand</td><td>Privacy and cost review</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Suggested delivery phases</h3>
+    <h4>Phase 1: Trial deployment</h4>
+    <ul>
+      <li>Select a container host and provision exactly one replica.</li>
+      <li>Create and configure the hosted trial Supabase project.</li>
+      <li>Store environment values in the hosting platform.</li>
+      <li>Extend GitHub Actions to deploy the commit-tagged image.</li>
+      <li>Implement mobile authentication and run a complete device-to-lens test.</li>
+    </ul>
+
+    <h4>Phase 2: Operational hardening</h4>
+    <ul>
+      <li>Add rate limiting, logging, request correlation, metrics, and alerts.</li>
+      <li>Add readiness checks, rollback procedures, integration tests, and vulnerability scans.</li>
+      <li>Define service-level objectives for availability, response latency, and provider failure rates.</li>
+    </ul>
+
+    <h4>Phase 3: Production and scale</h4>
+    <ul>
+      <li>Create an isolated production Supabase project and production hosting service.</li>
+      <li>Move pairing state into a shared TTL system before adding replicas.</li>
+      <li>Perform load, security, privacy, recovery, and cost reviews.</li>
+      <li>Promote immutable images through trial to production with an approval gate.</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <h2>Production-readiness checklist</h2>
+    <table class="checklist">
+      <thead><tr><th>Done</th><th>Requirement</th><th>Current evidence or next action</th></tr></thead>
+      <tbody>
+        <tr><td>&#9745;</td><td>API contract implemented</td><td>Four documented FastAPI endpoints</td></tr>
+        <tr><td>&#9745;</td><td>JWT authentication implemented</td><td>Supabase public JWKS verification</td></tr>
+        <tr><td>&#9745;</td><td>Provider integration implemented</td><td>OpenAI Responses API with tested options</td></tr>
+        <tr><td>&#9745;</td><td>Automated unit tests</td><td>20 passing</td></tr>
+        <tr><td>&#9745;</td><td>Container build</td><td>GitHub runner build passed</td></tr>
+        <tr><td>&#9745;</td><td>Protected source branch</td><td>Required Validate check and pull requests</td></tr>
+        <tr><td>&#9744;</td><td>Live trial host</td><td>Select provider and provision service</td></tr>
+        <tr><td>&#9744;</td><td>Real hosted Supabase projects</td><td>Create trial and production projects</td></tr>
+        <tr><td>&#9744;</td><td>Hosted secret configuration</td><td>Set values in runtime secret manager</td></tr>
+        <tr><td>&#9744;</td><td>Automated runtime deployment</td><td>Add provider-specific GitHub job</td></tr>
+        <tr><td>&#9744;</td><td>Mobile authentication integration</td><td>Implement in mobile repository</td></tr>
+        <tr><td>&#9744;</td><td>Rate limiting and abuse protection</td><td>Choose and implement policy</td></tr>
+        <tr><td>&#9744;</td><td>Production observability</td><td>Add logs, metrics, errors, and alerts</td></tr>
+        <tr><td>&#9744;</td><td>Shared pairing state</td><td>Required before horizontal scaling</td></tr>
+        <tr><td>&#9744;</td><td>Recovery and rollback validation</td><td>Document and test rollback</td></tr>
+        <tr><td>&#9744;</td><td>Security and load review</td><td>Complete before production launch</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Useful local commands</h3>
+    <pre># Start without authentication
+uv run uvicorn app.main:app --reload --env-file .env.local
+
+# Validate
+uv run ruff check .
+uv run python -m pytest
+
+# Local endpoints
+http://127.0.0.1:8000/healthz
+http://127.0.0.1:8000/docs</pre>
+
+    <h3>References</h3>
+    <ul>
+      <li>Repository: <a href="https://github.com/Adipat2003/metaglasses-backend">github.com/Adipat2003/metaglasses-backend</a></li>
+      <li>Successful CI/CD run: <a href="https://github.com/Adipat2003/metaglasses-backend/actions/runs/33904935020">GitHub Actions run 33904935020</a></li>
+      <li>Supabase JWT guide: <a href="https://supabase.com/docs/guides/auth/jwts">supabase.com/docs/guides/auth/jwts</a></li>
+      <li>OpenAI Docs, GPT-5.6 Sol: <a href="https://developers.openai.com/api/docs/models/gpt-5.6-sol">developers.openai.com/api/docs/models/gpt-5.6-sol</a></li>
+      <li>GitHub Pages scope: <a href="https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages">docs.github.com Pages overview</a></li>
+      <li>GitHub Container Registry: <a href="https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry">docs.github.com Container registry</a></li>
+    </ul>
+
+    <p class="footer-note">This report describes the verified state on September 4, 2026. Hosted URLs, external secrets, provider account configuration, mobile-client implementation, and later repository changes are outside this snapshot unless explicitly stated.</p>
+  </section>
+</body>
+</html>
