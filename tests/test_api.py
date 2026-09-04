@@ -122,9 +122,34 @@ def test_openapi_marks_phone_routes_as_bearer_protected() -> None:
 
     document = client.get("/openapi.json").json()
 
-    assert document["paths"]["/v1/chat"]["post"]["security"] == [{"HTTPBearer": []}]
-    assert document["paths"]["/v1/state"]["post"]["security"] == [{"HTTPBearer": []}]
+    assert document["paths"]["/v1/chat"]["post"]["security"] == [{"SupabaseBearer": []}]
+    assert document["paths"]["/v1/state"]["post"]["security"] == [{"SupabaseBearer": []}]
     assert "security" not in document["paths"]["/v1/display"]["get"]
+
+
+def test_openapi_categorizes_and_describes_every_endpoint() -> None:
+    client = TestClient(create_app(FakeChatService()))
+
+    document = client.get("/openapi.json").json()
+
+    assert [tag["name"] for tag in document["tags"]] == ["System", "Phone", "Lens"]
+    assert set(document["paths"]) == {"/healthz", "/v1/chat", "/v1/display", "/v1/state"}
+    expected_operations = {
+        ("/healthz", "get"): ("System", "getHealth"),
+        ("/v1/chat", "post"): ("Phone", "createChatResponse"),
+        ("/v1/display", "get"): ("Lens", "getDisplay"),
+        ("/v1/state", "post"): ("Phone", "updatePairingState"),
+    }
+    for (path, method), (tag, operation_id) in expected_operations.items():
+        operation = document["paths"][path][method]
+        assert operation["tags"] == [tag]
+        assert operation["operationId"] == operation_id
+        assert operation["summary"]
+        assert operation["description"]
+
+    security_scheme = document["components"]["securitySchemes"]["SupabaseBearer"]
+    assert security_scheme["scheme"] == "bearer"
+    assert "Supabase access token" in security_scheme["description"]
 
 
 def test_pairing_tokens_cannot_be_claimed_by_another_user() -> None:

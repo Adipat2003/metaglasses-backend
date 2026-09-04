@@ -68,7 +68,14 @@ def build_current_user_dependency(
     settings: Settings,
     token_verifier: TokenVerifier | None = None,
 ) -> Callable[..., AuthenticatedUser]:
-    bearer = HTTPBearer(auto_error=False)
+    bearer = HTTPBearer(
+        auto_error=False,
+        scheme_name="SupabaseBearer",
+        description=(
+            "Supabase access token issued to the signed-in phone user. "
+            "Use the token value without adding another Bearer prefix."
+        ),
+    )
     verifier = token_verifier
     if settings.auth_mode == "required" and verifier is None:
         verifier = SupabaseTokenVerifier(settings)
