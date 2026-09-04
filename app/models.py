@@ -45,6 +45,15 @@ class ChatRequest(ApiModel):
         min_length=1,
         description="Complete conversation transcript maintained by the phone.",
     )
+    system: str | None = Field(
+        default=None,
+        max_length=4_000,
+        description=(
+            "Optional agent instructions from the phone's selected agent, appended to the "
+            "server's own lens-brevity system prompt rather than replacing it."
+        ),
+        examples=["You are a patient cycling coach. Prefer checking tire pressure first."],
+    )
 
 
 class StateRequest(ApiModel):

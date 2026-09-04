@@ -17,9 +17,16 @@ class FakeChatService:
     def __init__(self, result: str = "Pry the tire off the rim with your levers.") -> None:
         self.result = result
         self.messages: list[ConversationMessage] | None = None
+        self.system: str | None = None
 
-    async def generate(self, messages: Sequence[ConversationMessage], pairing_token: str) -> str:
+    async def generate(
+        self,
+        messages: Sequence[ConversationMessage],
+        pairing_token: str,
+        system: str | None = None,
+    ) -> str:
         self.messages = list(messages)
+        self.system = system
         return self.result
 
 
@@ -27,7 +34,12 @@ class FailingChatService:
     def __init__(self, error: Exception) -> None:
         self.error = error
 
-    async def generate(self, messages: Sequence[ConversationMessage], pairing_token: str) -> str:
+    async def generate(
+        self,
+        messages: Sequence[ConversationMessage],
+        pairing_token: str,
+        system: str | None = None,
+    ) -> str:
         raise self.error
 
 
@@ -73,6 +85,8 @@ def test_unknown_display_token_requires_repair() -> None:
     response = client.get(f"/v1/display?token={TOKEN}")
 
     assert response.status_code == 401
+    assert "resume automatically" in response.json()["detail"]
+    assert "re-pair" not in response.json()["detail"].lower()
 
 
 def test_phone_state_registers_pairing_and_updates_display() -> None:
@@ -208,6 +222,44 @@ def test_chat_returns_and_caches_the_same_text_for_the_lens() -> None:
         ConversationMessage(role="user", content="how do I change a bike tire")
     ]
     assert service.messages == expected_messages
+    assert service.system is None
+
+
+def test_chat_forwards_the_agent_system_prompt_to_the_service() -> None:
+    service = FakeChatService()
+    client = TestClient(create_app(service))
+    payload = {
+        "pairingToken": TOKEN,
+        "messages": [{"role": "user", "content": "how do I change a bike tire"}],
+        "system": "You are a patient cycling coach.",
+    }
+
+    response = client.post("/v1/chat", json=payload)
+
+    assert response.status_code == 200
+    assert service.system == "You are a patient cycling coach."
+
+
+def test_openai_service_appends_agent_system_prompt_without_replacing_its_own(
+    monkeypatch,
+) -> None:
+    client = FakeOpenAIClient()
+    service = OpenAIChatService()
+    service._client = client
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    asyncio.run(
+        service.generate(
+            [ConversationMessage(role="user", content="help")],
+            TOKEN,
+            system="You are a patient cycling coach.",
+        )
+    )
+
+    assert client.responses.request is not None
+    instructions = client.responses.request["instructions"]
+    assert "You are a patient cycling coach." in instructions
+    assert "MetaGlasses step-by-step voice assistant" in instructions
 
 
 def test_large_transcript_is_rejected_with_413() -> None:

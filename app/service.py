@@ -23,7 +23,10 @@ class ModelProviderError(Exception):
 
 class ChatService(Protocol):
     async def generate(
-        self, messages: Sequence[ConversationMessage], pairing_token: str
+        self,
+        messages: Sequence[ConversationMessage],
+        pairing_token: str,
+        system: str | None = None,
     ) -> str: ...
 
 
@@ -32,7 +35,10 @@ class OpenAIChatService:
         self._client: openai.AsyncOpenAI | None = None
 
     async def generate(
-        self, messages: Sequence[ConversationMessage], pairing_token: str
+        self,
+        messages: Sequence[ConversationMessage],
+        pairing_token: str,
+        system: str | None = None,
     ) -> str:
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -41,10 +47,12 @@ class OpenAIChatService:
         if self._client is None:
             self._client = openai.AsyncOpenAI(api_key=api_key)
 
+        instructions = f"{SYSTEM_PROMPT}\n\n{system}" if system else SYSTEM_PROMPT
+
         try:
             response = await self._client.responses.create(
                 model=os.getenv("OPENAI_MODEL", "gpt-5.6-sol"),
-                instructions=SYSTEM_PROMPT,
+                instructions=instructions,
                 input=[message.model_dump() for message in messages],
                 max_output_tokens=160,
                 reasoning={"effort": "low"},

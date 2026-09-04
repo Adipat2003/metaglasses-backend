@@ -145,7 +145,9 @@ def create_app(
         except PairingOwnershipError as error:
             raise _pairing_forbidden() from error
         try:
-            text = await service.generate(request.messages, request.pairing_token)
+            text = await service.generate(
+                request.messages, request.pairing_token, system=request.system
+            )
         except RateLimitedError as error:
             await store.set_state(request.pairing_token, "idle", user.id)
             raise HTTPException(
@@ -195,7 +197,10 @@ def create_app(
         if current is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unknown or expired pairing token. Re-pair on the phone.",
+                detail=(
+                    "This pairing has no recent activity. It will resume automatically the "
+                    "next time the paired phone sends a request."
+                ),
             )
         return current
 
