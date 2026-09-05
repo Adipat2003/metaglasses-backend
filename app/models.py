@@ -106,7 +106,7 @@ class HealthResponse(BaseModel):
     """Process health and active security configuration."""
 
     status: Literal["ok"] = Field(description="Process liveness status.", examples=["ok"])
-    environment: Literal["local", "dev", "trial", "prod"] = Field(
+    environment: Literal["local", "trial", "prod"] = Field(
         description="Selected application environment.", examples=["local"]
     )
     auth: Literal["disabled", "required"] = Field(

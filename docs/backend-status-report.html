@@ -228,11 +228,11 @@
 
     <div class="status-grid">
       <div class="status-card"><div class="label">Local API</div><div class="value done">Running and healthy</div></div>
-      <div class="status-card"><div class="label">Automated tests</div><div class="value done">20 passing</div></div>
+      <div class="status-card"><div class="label">Automated tests</div><div class="value done">21 passing</div></div>
       <div class="status-card"><div class="label">GitHub CI/CD</div><div class="value done">Passing</div></div>
       <div class="status-card"><div class="label">Production image</div><div class="value done">Published to GHCR</div></div>
       <div class="status-card"><div class="label">Hosted backend</div><div class="value pending">Not deployed</div></div>
-      <div class="status-card"><div class="label">Hosted Supabase projects</div><div class="value pending">Placeholders only</div></div>
+      <div class="status-card"><div class="label">Hosted Supabase projects</div><div class="value pending">Production connected; trial pending</div></div>
     </div>
 
     <div class="callout good">
@@ -241,7 +241,7 @@
     </div>
     <div class="callout risk">
       <strong>Primary production blocker</strong>
-      There is no persistent hosting target, no real trial or production configuration, and pairing state is lost on process restart. A single replica is mandatory until state moves to a shared TTL store.
+      There is no persistent backend hosting target, the trial environment is not configured, and pairing state is lost on process restart. A single replica is mandatory until state moves to a shared TTL store.
     </div>
 
     <h3>Contents</h3>
@@ -415,12 +415,13 @@ Content-Type: application/json
       </tbody>
     </table>
 
-    <p>Email signup and refresh-token rotation are enabled locally. Email confirmation is disabled locally, anonymous sign-in is disabled, JWT lifetime is one hour, and the native callback is <code>glance-dev://auth/callback</code>. Each developer generates an ignored ES256 signing-key file.</p>
+    <p>Email signup and refresh-token rotation are enabled locally. Email confirmation is disabled locally, anonymous sign-in is disabled, JWT lifetime is one hour, and the native callback is <code>glance-local://auth/callback</code>. Each developer generates an ignored ES256 signing-key file.</p>
 
     <h3>Not yet completed</h3>
     <ul>
-      <li>The trial and production project references remain placeholders.</li>
-      <li>Hosted redirect allowlists, site URLs, provider settings, and email policies are not verified.</li>
+      <li>The trial project reference remains a placeholder.</li>
+      <li>Production email Auth is reachable, but Google and Apple providers are not enabled.</li>
+      <li>Hosted redirect allowlists, site URLs, and email policies still require end-to-end verification.</li>
       <li>The mobile sign-in, Keychain storage, refresh flow, and deep-link handling are outside this repository and remain integration work.</li>
       <li>There is no live Supabase token integration test in CI.</li>
       <li>Immediate session revocation is not checked against Supabase on each API request.</li>
@@ -515,7 +516,7 @@ Content-Type: application/json
     <table>
       <thead><tr><th>Variable</th><th>Required when</th><th>Purpose</th></tr></thead>
       <tbody>
-        <tr><td><code>APP_ENV</code></td><td>Always</td><td>Selects local, dev, trial, or prod</td></tr>
+        <tr><td><code>APP_ENV</code></td><td>Always</td><td>Selects local, trial, or prod</td></tr>
         <tr><td><code>AUTH_MODE</code></td><td>Defaults to required</td><td>Allows required or disabled authentication</td></tr>
         <tr><td><code>SUPABASE_URL</code></td><td>Authentication required</td><td>Defines issuer and public JWKS host</td></tr>
         <tr><td><code>SUPABASE_JWT_AUDIENCE</code></td><td>Optional</td><td>Defaults to authenticated</td></tr>
@@ -530,17 +531,16 @@ Content-Type: application/json
     <table>
       <thead><tr><th>Environment</th><th>Authentication</th><th>Supabase</th><th>Backend location</th><th>Status</th></tr></thead>
       <tbody>
-        <tr><td>Local</td><td>Disabled explicitly</td><td>None</td><td><code>http://127.0.0.1:8000</code></td><td>Running now</td></tr>
-        <tr><td>Dev</td><td>Required</td><td>Local CLI at <code>127.0.0.1:54321</code></td><td>Not deployed</td><td>Template available</td></tr>
+        <tr><td>Local</td><td>Disabled or required</td><td>None or local CLI at <code>127.0.0.1:54321</code></td><td><code>http://127.0.0.1:8000</code></td><td>Templates available</td></tr>
         <tr><td>Trial</td><td>Required</td><td>Hosted project placeholder</td><td>Not deployed</td><td>Not configured</td></tr>
-        <tr><td>Prod</td><td>Required</td><td>Hosted project placeholder</td><td>Not deployed</td><td>Not configured</td></tr>
+        <tr><td>Prod</td><td>Required</td><td>Hosted project connected</td><td>Not deployed</td><td>Email Auth reachable</td></tr>
       </tbody>
     </table>
 
     <h3>Configuration guardrails</h3>
     <ul>
       <li><code>APP_ENV</code> must be selected explicitly.</li>
-      <li>Authentication cannot be disabled in dev, trial, or prod.</li>
+      <li>Authentication cannot be disabled in trial or prod.</li>
       <li>A Supabase URL is mandatory when authentication is required.</li>
       <li>Supabase URLs must be absolute HTTP or HTTPS URLs.</li>
       <li>Trial and production require HTTPS.</li>

@@ -6,8 +6,7 @@ The Supabase Free plan permits two active hosted projects. Use them as follows:
 
 | App environment | Supabase environment | User data |
 | --- | --- | --- |
-| `local` | None | No auth; deterministic local user |
-| `dev` | Supabase CLI running locally | Disposable development users |
+| `local` | None or Supabase CLI running locally | Local API work and disposable auth users |
 | `trial` | Hosted project named `Glance Trial` | TestFlight and trial users only |
 | `prod` | Hosted project named `Glance Production` | Production users only |
 
@@ -103,8 +102,8 @@ routes:
 .venv\Scripts\python.exe -m pytest
 ```
 
-The bypass cannot be selected with `APP_ENV=dev`, `trial`, or `prod`; application
-startup fails if that combination is attempted.
+The bypass cannot be selected with `APP_ENV=trial` or `prod`; application startup
+fails if that combination is attempted.
 
 ## Local Supabase integration testing
 
@@ -116,15 +115,15 @@ the same CLI version:
 Copy-Item supabase/signing_keys.example.json supabase/signing_keys.json
 npx --yes supabase@2.116.0 gen signing-key --algorithm ES256 --append
 npx --yes supabase@2.116.0 start
-Copy-Item .env.dev.example .env.dev
-uv run uvicorn app.main:app --reload --env-file .env.dev
+Copy-Item .env.local-auth.example .env.local-auth
+uv run uvicorn app.main:app --reload --env-file .env.local-auth
 ```
 
 The generated `supabase/signing_keys.json` is ignored by Git. Each developer and CI
 environment must generate its own key rather than sharing private signing material.
 
 The CLI reports the local project URL and publishable key. The default API URL is
-`http://127.0.0.1:54321`, which already matches the development template. Integration
+`http://127.0.0.1:54321`, which already matches the local-auth template. Integration
 requests must obtain a local Supabase access token and send it as a bearer token.
 
 ### Local Google and Apple provider credentials
@@ -170,7 +169,7 @@ project and define `supabase_url`, `supabase_publishable_key`, `backend_url`,
    with bearer token** to prove the backend accepts it.
 
 Each Supabase project is a separate issuer and user store. Repeat signup and sign-in
-against each environment. A dev token cannot authenticate against trial or production,
+against each environment. A local token cannot authenticate against trial or production,
 and a trial token cannot authenticate against production.
 
 The request headers serve different purposes:
@@ -222,7 +221,7 @@ is a resource server and must never receive a user's password.
 2. Store the refresh token in Keychain and refresh short-lived sessions through the
    Supabase client.
 3. Set the API client's bearer token to the current Supabase access token.
-4. Use separate project URLs and publishable keys in dev, trial, and production builds.
+4. Use separate project URLs and publishable keys in local, trial, and production builds.
 5. Handle deep links for email confirmation, password reset, and later social login.
 6. Include the user's lens pairing token in `/v1/chat` and `/v1/state` requests.
 
