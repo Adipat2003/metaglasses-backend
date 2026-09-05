@@ -29,6 +29,44 @@ Create `Glance Trial` and `Glance Production` in the Supabase dashboard. For eac
 6. Keep the secret key, service-role key, database password, and personal access token
    out of the mobile app and repository.
 
+### Enable Google in each hosted project
+
+Google configuration is separate for `Glance Trial` and `Glance Production`.
+
+1. In Google Cloud Console, create or select a project, configure the OAuth consent
+   screen, and create an OAuth 2.0 Client ID of type **Web application**.
+2. In the matching Supabase project, open **Authentication > Sign In / Providers >
+   Google**. Copy the callback URL shown by Supabase. It has the form
+   `https://PROJECT_REF.supabase.co/auth/v1/callback`.
+3. Add that exact callback under **Authorized redirect URIs** in the Google client.
+4. Paste the Google client ID and client secret into the Supabase Google provider and
+   enable it. Never place the client secret in the app or this repository.
+5. Under **Authentication > URL Configuration**, add the environment's exact app
+   callback: `glance-trial://auth/callback` or `glance://auth/callback`.
+
+Use separate Google OAuth clients for trial and production so that callbacks and
+consent-screen configuration cannot be changed across environments accidentally.
+
+### Enable Apple in each hosted project
+
+Apple configuration is also separate for trial and production.
+
+1. In Apple Developer, create an App ID with Sign in with Apple enabled. For a web
+   OAuth flow, also create a Services ID and a Sign in with Apple private key.
+2. Configure the Services ID website domain as `PROJECT_REF.supabase.co` and its return
+   URL as `https://PROJECT_REF.supabase.co/auth/v1/callback`.
+3. Generate an Apple client secret from the Team ID, Services ID, Key ID, and `.p8`
+   signing key. Do not put the `.p8` file or generated secret in this repository.
+4. In Supabase, open **Authentication > Sign In / Providers > Apple**. Enter the
+   Services ID as the first client ID, enter the generated secret, and enable Apple.
+5. Add the exact environment callback under **Authentication > URL Configuration**.
+6. Schedule secret rotation before Apple's generated client secret expires. Apple web
+   OAuth secrets must be rotated at least every six months.
+
+For a native iOS application, Apple's native sign-in flow is preferred. The app sends
+the Apple identity token and nonce to Supabase. Apple supplies the user's full name
+only on the first native sign-in, so the app must save it then if the product needs it.
+
 Suggested native callback schemes are `glance-trial://auth/callback` and
 `glance://auth/callback`. Register the matching URL scheme in each iOS target and add
 the exact callback to the corresponding Supabase project's redirect allowlist.
@@ -88,6 +126,91 @@ environment must generate its own key rather than sharing private signing materi
 The CLI reports the local project URL and publishable key. The default API URL is
 `http://127.0.0.1:54321`, which already matches the development template. Integration
 requests must obtain a local Supabase access token and send it as a bearer token.
+
+### Local Google and Apple provider credentials
+
+The checked-in `supabase/config.toml` enables both providers and reads all credentials
+from process environment variables. Copy the safe template, populate the ignored
+file, load its values into the current PowerShell process, and then start Supabase:
+
+```powershell
+Copy-Item supabase/oauth.env.example supabase/oauth.env
+$oauthConfig = Get-Content supabase/oauth.env | ConvertFrom-StringData
+$oauthConfig.GetEnumerator() | ForEach-Object {
+    [Environment]::SetEnvironmentVariable($_.Key, $_.Value, "Process")
+}
+supabase start
+```
+
+For Google, register `http://127.0.0.1:54321/auth/v1/callback` as an authorized
+redirect URI in the Google web client. Apple does not accept a loopback HTTP return
+URL for web OAuth. Set `SUPABASE_AUTH_EXTERNAL_APPLE_REDIRECT_URI` to the public HTTPS
+tunnel URL that forwards to the local Supabase Auth callback. Testing Apple in the
+hosted trial project is usually simpler.
+
+The local provider credential file is ignored by Git. Do not paste its values into an
+issue, commit, chat, Postman export, or shell transcript.
+
+## Simulate signup and retrieve a bearer token in Postman
+
+Import the collection and one or more example environments from `postman/`:
+
+1. Import `MetaGlasses Supabase Auth.postman_collection.json`.
+2. Import the Dev, Trial, and Production example environment files you need.
+3. Duplicate each imported example so your populated copy is clearly local.
+4. Select the environment in Postman's environment picker.
+5. Fill `supabase_publishable_key`, `test_email`, and `test_password`. For trial and
+   production, also replace the placeholder project and backend URLs.
+6. Run **Sign up with email and password**. Local Supabase normally returns a session
+   immediately. A hosted project with email confirmation enabled returns a user but
+   no session until the link is confirmed.
+7. Run **Sign in with password and save bearer token**. Its test script saves the
+   returned `access_token` and `refresh_token` as values in the selected environment.
+8. Run **Get current user** to validate the token, then run **Set paired lens state
+   with bearer token** to prove the backend accepts it.
+
+Each Supabase project is a separate issuer and user store. Repeat signup and sign-in
+against each environment. A dev token cannot authenticate against trial or production,
+and a trial token cannot authenticate against production.
+
+The request headers serve different purposes:
+
+```http
+apikey: <SUPABASE_PUBLISHABLE_KEY>
+Authorization: Bearer <USER_ACCESS_TOKEN>
+```
+
+The publishable key identifies the Supabase project and is safe for a public client.
+It is not a user bearer token. Never use a Supabase secret key or legacy service-role
+key in Postman for these tests. The access token is short-lived; sign in again when it
+expires. Treat the refresh token as a credential and never export or commit a populated
+Postman environment.
+
+Social login cannot be fully simulated as a password request because Google and Apple
+require interactive browser consent. Use the collection's **Start Google OAuth** or
+**Start Apple OAuth** request to inspect the redirect, but complete the flow in the app
+or a browser that can return to the registered deep link. The resulting Supabase
+session contains the same kind of access token that the FastAPI backend accepts.
+
+## Find values and activity in the Supabase dashboard
+
+For each hosted project:
+
+- **Connect** or **Project Settings > API Keys** shows the project URL and publishable
+  key used by the Postman environment and mobile app.
+- **Authentication > Sign In / Providers** shows whether Email, Google, and Apple are
+  enabled and contains the hosted provider credential forms.
+- **Authentication > URL Configuration** contains the site URL and allowed redirects.
+- **Authentication > Users** lists email/password and social users. Opening a user
+  shows identities and metadata.
+- **Authentication > Audit Logs** shows signup, sign-in, token refresh, password-reset,
+  and logout activity.
+- **Logs > Auth** provides lower-level Auth service logs when a callback or token
+  exchange fails.
+
+Local Supabase Studio is available at `http://127.0.0.1:54323` after `supabase start`.
+Its Authentication section shows local users. Local confirmation and reset emails are
+captured by Mailpit at `http://127.0.0.1:54324` instead of being delivered externally.
 
 ## Mobile changes required
 

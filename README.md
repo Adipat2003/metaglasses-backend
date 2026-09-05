@@ -43,7 +43,9 @@ web client origin. Keep `OPENAI_API_KEY` and all future secrets in the untracked
 or the deployment platform's secret manager.
 
 See [Supabase setup](docs/supabase.md) for the dashboard, signing-key, mobile-client,
-and deployment checklist.
+provider, Postman testing, bearer-token, and deployment checklists. The importable
+Postman collection and safe dev, trial, and production environment templates are in
+[`postman/`](postman/).
 
 ## Run locally without auth
 

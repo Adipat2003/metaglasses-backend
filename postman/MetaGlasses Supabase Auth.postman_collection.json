@@ -1,0 +1,157 @@
+{
+  "info": {
+    "name": "MetaGlasses Supabase Auth",
+    "description": "Create and sign in Supabase test users, inspect the current user, start social OAuth, and call the protected FastAPI backend. Select the dev, trial, or prod example environment first. Access and refresh tokens are saved only to the selected Postman environment.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Supabase Auth",
+      "item": [
+        {
+          "name": "Read enabled providers",
+          "request": {
+            "method": "GET",
+            "header": [
+              {"key": "apikey", "value": "{{supabase_publishable_key}}", "type": "text"}
+            ],
+            "url": "{{supabase_url}}/auth/v1/settings",
+            "description": "Returns the public Auth configuration. Check external.google and external.apple to confirm that each provider is enabled."
+          }
+        },
+        {
+          "name": "Sign up with email and password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body.access_token) pm.environment.set('access_token', body.access_token);",
+                  "if (body.refresh_token) pm.environment.set('refresh_token', body.refresh_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "apikey", "value": "{{supabase_publishable_key}}", "type": "text"},
+              {"key": "Content-Type", "value": "application/json", "type": "text"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{test_email}}\",\n  \"password\": \"{{test_password}}\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": "{{supabase_url}}/auth/v1/signup",
+            "description": "Creates a normal user. Hosted projects that require email confirmation will not return a session until the confirmation link is used."
+          }
+        },
+        {
+          "name": "Sign in with password and save bearer token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('An access token was returned', () => pm.expect(body.access_token).to.be.a('string').and.not.empty);",
+                  "if (body.access_token) pm.environment.set('access_token', body.access_token);",
+                  "if (body.refresh_token) pm.environment.set('refresh_token', body.refresh_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "apikey", "value": "{{supabase_publishable_key}}", "type": "text"},
+              {"key": "Content-Type", "value": "application/json", "type": "text"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{test_email}}\",\n  \"password\": \"{{test_password}}\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": "{{supabase_url}}/auth/v1/token?grant_type=password",
+            "description": "Signs in and stores access_token and refresh_token as current values in the selected Postman environment."
+          }
+        },
+        {
+          "name": "Get current user",
+          "request": {
+            "method": "GET",
+            "header": [
+              {"key": "apikey", "value": "{{supabase_publishable_key}}", "type": "text"},
+              {"key": "Authorization", "value": "Bearer {{access_token}}", "type": "text"}
+            ],
+            "url": "{{supabase_url}}/auth/v1/user",
+            "description": "Verifies the saved bearer token and returns its Supabase user."
+          }
+        },
+        {
+          "name": "Start Google OAuth",
+          "request": {
+            "method": "GET",
+            "header": [
+              {"key": "apikey", "value": "{{supabase_publishable_key}}", "type": "text"}
+            ],
+            "url": "{{supabase_url}}/auth/v1/authorize?provider=google&redirect_to={{app_redirect_url}}",
+            "description": "Starts the interactive Google redirect flow. A browser or app deep-link handler is easier than Postman for completing this flow."
+          }
+        },
+        {
+          "name": "Start Apple OAuth",
+          "request": {
+            "method": "GET",
+            "header": [
+              {"key": "apikey", "value": "{{supabase_publishable_key}}", "type": "text"}
+            ],
+            "url": "{{supabase_url}}/auth/v1/authorize?provider=apple&redirect_to={{app_redirect_url}}",
+            "description": "Starts the interactive Apple redirect flow. Apple web OAuth requires a public HTTPS callback."
+          }
+        }
+      ]
+    },
+    {
+      "name": "FastAPI Backend",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{backend_url}}/healthz"
+          }
+        },
+        {
+          "name": "Set paired lens state with bearer token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Authorization", "value": "Bearer {{access_token}}", "type": "text"},
+              {"key": "Content-Type", "value": "application/json", "type": "text"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pairingToken\": \"{{pairing_token}}\",\n  \"state\": \"listening\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": "{{backend_url}}/v1/state",
+            "description": "Calls a protected backend endpoint with the Supabase user access token."
+          }
+        },
+        {
+          "name": "Read paired lens display",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{backend_url}}/v1/display?token={{pairing_token}}",
+            "description": "Uses the pairing token as the lens capability credential. This route does not use the Supabase bearer token."
+          }
+        }
+      ]
+    }
+  ]
+}
