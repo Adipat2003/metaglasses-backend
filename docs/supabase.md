@@ -153,20 +153,20 @@ issue, commit, chat, Postman export, or shell transcript.
 
 ## Simulate signup and retrieve a bearer token in Postman
 
-Import the collection and one or more example environments from `postman/`:
+Keep Postman collections and environments outside the repository because populated
+environments contain credentials. Create an environment for the target Supabase
+project and define `supabase_url`, `supabase_publishable_key`, `backend_url`,
+`test_email`, `test_password`, `access_token`, `refresh_token`, and `pairing_token`.
 
-1. Import `MetaGlasses Supabase Auth.postman_collection.json`.
-2. Import the Dev, Trial, and Production example environment files you need.
-3. Duplicate each imported example so your populated copy is clearly local.
-4. Select the environment in Postman's environment picker.
-5. Fill `supabase_publishable_key`, `test_email`, and `test_password`. For trial and
-   production, also replace the placeholder project and backend URLs.
-6. Run **Sign up with email and password**. Local Supabase normally returns a session
+1. Select the environment in Postman's environment picker.
+2. Fill `supabase_publishable_key`, `test_email`, and `test_password`. For trial and
+   production, also configure the project and backend URLs.
+3. Send **Sign up with email and password**. Local Supabase normally returns a session
    immediately. A hosted project with email confirmation enabled returns a user but
    no session until the link is confirmed.
-7. Run **Sign in with password and save bearer token**. Its test script saves the
+4. Send **Sign in with password and save bearer token**. A Postman test script can save the
    returned `access_token` and `refresh_token` as values in the selected environment.
-8. Run **Get current user** to validate the token, then run **Set paired lens state
+5. Send **Get current user** to validate the token, then send **Set paired lens state
    with bearer token** to prove the backend accepts it.
 
 Each Supabase project is a separate issuer and user store. Repeat signup and sign-in
@@ -187,10 +187,10 @@ expires. Treat the refresh token as a credential and never export or commit a po
 Postman environment.
 
 Social login cannot be fully simulated as a password request because Google and Apple
-require interactive browser consent. Use the collection's **Start Google OAuth** or
-**Start Apple OAuth** request to inspect the redirect, but complete the flow in the app
-or a browser that can return to the registered deep link. The resulting Supabase
-session contains the same kind of access token that the FastAPI backend accepts.
+require interactive browser consent. Start the provider authorization request in a
+browser or Postman, but complete the flow in an app or browser that can return to the
+registered deep link. The resulting Supabase session contains the same kind of access
+token that the FastAPI backend accepts.
 
 ## Find values and activity in the Supabase dashboard
 
