@@ -17,20 +17,19 @@ running more than one instance.
 ## Environments
 
 The Free Supabase tier supports two hosted projects. This repository uses them for
-`trial` and `prod`; `dev` uses the local Supabase CLI stack. Pure local development
-and unit tests use `APP_ENV=local` with the explicit authentication bypass.
+`trial` and `prod`. Local development uses `APP_ENV=local`, either with an explicit
+authentication bypass or with the local Supabase CLI stack.
 
 | Environment | Supabase | Authentication | Purpose |
 | --- | --- | --- | --- |
-| `local` | None | Disabled | Fast unit tests and local API work |
-| `dev` | Local CLI at port 54321 | Required | Auth integration and schema development |
+| `local` | None or local CLI at port 54321 | Disabled or required | Local API and auth integration work |
 | `trial` | Hosted project 1 | Required | TestFlight and external trials |
 | `prod` | Hosted project 2 | Required | Production users |
 
-Authentication cannot be disabled in `dev`, `trial`, or `prod`. Trial and production
-also reject wildcard CORS configuration. The backend only needs the public Supabase
-project URL to validate JWTs against its JWKS endpoint. Do not give it a service-role
-key for authentication.
+Authentication can be disabled only in `local`. Trial and production also reject
+wildcard CORS configuration. The backend only needs the public Supabase project URL
+to validate JWTs against its JWKS endpoint. Do not give it a service-role key for
+authentication.
 
 Copy the appropriate committed template to an ignored environment file:
 
@@ -69,8 +68,9 @@ initial integration.
 
 ## Run against Supabase Auth
 
-Use `.env.dev` with `supabase start`, or the trial/production environment file in its
-deployment. The mobile app signs in directly with Supabase and sends its access token:
+Use `.env.local-auth` with `supabase start`, or the trial/production environment file
+in its deployment. The mobile app signs in directly with Supabase and sends its access
+token:
 
 ```http
 Authorization: Bearer <supabase-access-token>

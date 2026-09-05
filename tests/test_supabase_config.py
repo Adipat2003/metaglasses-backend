@@ -6,6 +6,8 @@ def test_local_supabase_enables_google_and_apple_with_environment_credentials() 
     config_path = Path(__file__).parents[1] / "supabase" / "config.toml"
     config = tomllib.loads(config_path.read_text(encoding="utf-8"))
 
+    assert config["auth"]["additional_redirect_urls"] == ["glance-local://auth/callback"]
+
     google = config["auth"]["external"]["google"]
     assert google["enabled"] is True
     assert google["client_id"] == "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"

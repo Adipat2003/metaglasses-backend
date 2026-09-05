@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlparse
 
-AppEnvironment = Literal["local", "dev", "trial", "prod"]
+AppEnvironment = Literal["local", "trial", "prod"]
 AuthMode = Literal["disabled", "required"]
 
 
@@ -24,8 +24,8 @@ class Settings:
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Settings":
         values = os.environ if environ is None else environ
         app_env = values.get("APP_ENV")
-        if app_env not in {"local", "dev", "trial", "prod"}:
-            raise ConfigurationError("APP_ENV must be one of: local, dev, trial, prod")
+        if app_env not in {"local", "trial", "prod"}:
+            raise ConfigurationError("APP_ENV must be one of: local, trial, prod")
 
         auth_mode = values.get("AUTH_MODE", "required")
         if auth_mode not in {"disabled", "required"}:
