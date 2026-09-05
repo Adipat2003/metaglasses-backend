@@ -3,7 +3,7 @@
 FastAPI service for the v0.1 phone-to-lens text loop. Phone endpoints use
 Supabase access tokens outside local unit tests. It exposes these endpoints:
 
-- `POST /v1/chat`: accepts a full text transcript, calls GPT-5.6 Sol, and stores only
+- `POST /v1/chat`: accepts a full text transcript, calls Kimi K3 through NVIDIA, and stores only
   the newest response for the paired lens.
 - `GET /v1/display?token=...`: returns the newest response and phone-driven state.
 - `POST /v1/state`: updates the lens state without blocking the phone voice loop.
@@ -31,14 +31,14 @@ wildcard CORS configuration. The backend only needs the public Supabase project 
 to validate JWTs against its JWKS endpoint. Do not give it a service-role key for
 authentication.
 
-Copy the appropriate committed template to an ignored environment file:
+Copy the committed template to an ignored environment file:
 
 ```powershell
-Copy-Item .env.local.example .env.local
+Copy-Item examples/.env.example .env.local
 ```
 
 Replace placeholders in trial and production with the corresponding project URL and
-web client origin. Keep `OPENAI_API_KEY` and all future secrets in the untracked file
+web client origin. Keep `NVIDIA_API_KEY` and all future secrets in the untracked file
 or the deployment platform's secret manager.
 
 See [Supabase setup](docs/supabase.md) for the dashboard, signing-key, mobile-client,
@@ -59,8 +59,12 @@ uv run uvicorn app.main:app --reload --env-file .env.local
 The API is available at `http://127.0.0.1:8000`; FastAPI's interactive API page is
 at `http://127.0.0.1:8000/docs`.
 
-The default model is `gpt-5.6-sol`. Set `OPENAI_MODEL` to select another compatible
-OpenAI model after testing its latency and response quality.
+The default model is `moonshotai/kimi-k3` on NVIDIA's API Catalog endpoint. Generate
+a replacement key from the [Kimi K3 catalog page](https://build.nvidia.com/moonshotai/kimi-k3),
+place it in the ignored `.env.local` as `NVIDIA_API_KEY`, and set `NVIDIA_MODEL` to
+select another compatible NVIDIA model after testing its latency and response quality.
+The catalog endpoint is intended for prototyping and is subject to NVIDIA's current
+trial limits and terms.
 
 Set `CORS_ORIGINS` to the web app's deployed origin or a comma-separated allowlist
 before deployment. The local default is `*` to permit the separate web client during
@@ -107,8 +111,8 @@ ghcr.io/adipat2003/metaglasses-backend:COMMIT_SHA
 
 GitHub stores and builds the image but does not run persistent web services. Deploy
 the published image to a container host and configure `APP_ENV`, `AUTH_MODE`,
-`SUPABASE_URL`, `SUPABASE_JWT_AUDIENCE`, `CORS_ORIGINS`, `OPENAI_API_KEY`, and
-optionally `OPENAI_MODEL` and `PAIRING_TTL_SECONDS` there. Run exactly one replica
+`SUPABASE_URL`, `SUPABASE_JWT_AUDIENCE`, `CORS_ORIGINS`, `NVIDIA_API_KEY`, and
+optionally `NVIDIA_MODEL` and `PAIRING_TTL_SECONDS` there. Run exactly one replica
 until the in-memory pairing store is replaced with a shared TTL store.
 
 ## Pairing lifecycle

@@ -16,7 +16,7 @@ from app.models import (
     HealthResponse,
     StateRequest,
 )
-from app.service import ChatService, ModelProviderError, OpenAIChatService, RateLimitedError
+from app.service import ChatService, ModelProviderError, NvidiaChatService, RateLimitedError
 from app.store import PairingOwnershipError, PairingStore
 
 MAX_TRANSCRIPT_BYTES = 256_000
@@ -87,7 +87,7 @@ def create_app(
     )
 
     store = PairingStore()
-    service = chat_service or OpenAIChatService()
+    service = chat_service or NvidiaChatService()
     current_user = build_current_user_dependency(resolved_settings, token_verifier)
 
     @app.get(
@@ -97,7 +97,7 @@ def create_app(
         description=(
             "Confirms that the FastAPI process is responding and reports the selected "
             "application environment and authentication mode. This is a liveness check; "
-            "it does not test OpenAI or Supabase connectivity."
+            "it does not test NVIDIA or Supabase connectivity."
         ),
         response_description="Current process health and runtime mode.",
         response_model=HealthResponse,

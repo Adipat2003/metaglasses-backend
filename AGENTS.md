@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Application code lives in `app/`. `main.py` defines the FastAPI routes and app factory, `models.py` contains request and response models, `service.py` integrates with OpenAI, `auth.py` validates Supabase tokens, and `store.py` manages ephemeral pairing state. Tests live in `tests/` and mirror behavior at the API and configuration boundaries. Supabase development files are under `supabase/`; operational setup notes belong in `docs/`. Use the committed `.env.*.example` files as configuration templates, but keep real environment files untracked.
+Application code lives in `app/`. `main.py` defines the FastAPI routes and app factory, `models.py` contains request and response models, `service.py` integrates with NVIDIA, `auth.py` validates Supabase tokens, and `store.py` manages ephemeral pairing state. Tests live in `tests/` and mirror behavior at the API and configuration boundaries. Supabase development files are under `supabase/`; operational setup notes belong in `docs/`. Use `examples/.env.example` as the configuration template, but keep real environment files untracked.
 
 ## Build, Test, and Development Commands
 

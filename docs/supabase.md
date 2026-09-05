@@ -85,8 +85,8 @@ Copy the appropriate template and supply its real values through your deployment
 platform:
 
 ```powershell
-Copy-Item .env.trial.example .env.trial
-Copy-Item .env.prod.example .env.prod
+Copy-Item examples/.env.example .env.trial
+Copy-Item examples/.env.example .env.prod
 ```
 
 Do not commit either resulting file. For deployments, configure the same variables in
@@ -115,7 +115,7 @@ the same CLI version:
 Copy-Item supabase/signing_keys.example.json supabase/signing_keys.json
 npx --yes supabase@2.116.0 gen signing-key --algorithm ES256 --append
 npx --yes supabase@2.116.0 start
-Copy-Item .env.local-auth.example .env.local-auth
+Copy-Item examples/.env.example .env.local-auth
 uv run uvicorn app.main:app --reload --env-file .env.local-auth
 ```
 

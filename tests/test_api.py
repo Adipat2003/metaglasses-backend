@@ -1,14 +1,14 @@
 import asyncio
 from collections.abc import Sequence
-from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.auth import AccessTokenError, AuthenticatedUser
 from app.config import Settings
 from app.main import MAX_TRANSCRIPT_BYTES, create_app
 from app.models import ConversationMessage
-from app.service import ModelProviderError, OpenAIChatService, RateLimitedError
+from app.service import SYSTEM_PROMPT, ModelProviderError, NvidiaChatService, RateLimitedError
 
 TOKEN = "a3f9d1e2c3b4a5f60718293a4b5c6d7e"
 
@@ -31,18 +31,27 @@ class FailingChatService:
         raise self.error
 
 
-class FakeResponsesClient:
+class FakeNvidiaResponse:
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "choices": [
+                {"message": {"content": "Use your tire levers to lift the bead off the rim."}}
+            ]
+        }
+
+
+class FakeNvidiaClient:
     def __init__(self) -> None:
         self.request: dict[str, object] | None = None
 
-    async def create(self, **kwargs: object) -> SimpleNamespace:
-        self.request = kwargs
-        return SimpleNamespace(output_text="Use your tire levers to lift the bead off the rim.")
-
-
-class FakeOpenAIClient:
-    def __init__(self) -> None:
-        self.responses = FakeResponsesClient()
+    async def post(self, url: str, **kwargs: object) -> FakeNvidiaResponse:
+        self.request = {"url": url, **kwargs}
+        return FakeNvidiaResponse()
 
 
 class FakeTokenVerifier:
@@ -234,18 +243,39 @@ def test_rate_limit_and_provider_errors_are_mapped_to_contract_statuses() -> Non
     assert unavailable.post("/v1/chat", json=payload).status_code == 503
 
 
-def test_openai_service_uses_sol_with_ephemeral_response_storage(monkeypatch) -> None:
-    client = FakeOpenAIClient()
-    service = OpenAIChatService()
-    service._client = client
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+def test_nvidia_service_uses_kimi_k3_with_short_non_streaming_responses(monkeypatch) -> None:
+    client = FakeNvidiaClient()
+    service = NvidiaChatService(client)
+    monkeypatch.setenv("NVIDIA_API_KEY", "test-key")
 
     text = asyncio.run(
         service.generate([ConversationMessage(role="user", content="help")], TOKEN)
     )
 
     assert text == "Use your tire levers to lift the bead off the rim."
-    assert client.responses.request is not None
-    assert client.responses.request["model"] == "gpt-5.6-sol"
-    assert client.responses.request["reasoning"] == {"effort": "low"}
-    assert client.responses.request["store"] is False
+    assert client.request is not None
+    assert client.request["url"] == "https://integrate.api.nvidia.com/v1/chat/completions"
+    assert client.request["headers"] == {
+        "Authorization": "Bearer test-key",
+        "Accept": "application/json",
+    }
+    payload = client.request["json"]
+    assert payload["model"] == "moonshotai/kimi-k3"
+    assert payload["max_tokens"] == 160
+    assert payload["stream"] is False
+    assert payload["reasoning_effort"] == "max"
+    assert payload["messages"][0] == {
+        "role": "system",
+        "content": SYSTEM_PROMPT,
+    }
+
+
+def test_nvidia_service_requires_an_api_key(monkeypatch) -> None:
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+
+    with pytest.raises(ModelProviderError, match="NVIDIA_API_KEY"):
+        asyncio.run(
+            NvidiaChatService().generate(
+                [ConversationMessage(role="user", content="help")], TOKEN
+            )
+        )

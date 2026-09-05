@@ -1,9 +1,8 @@
 import os
 from collections.abc import Sequence
-from hashlib import sha256
 from typing import Protocol
 
-import openai
+import httpx
 
 from app.models import ConversationMessage
 
@@ -27,37 +26,51 @@ class ChatService(Protocol):
     ) -> str: ...
 
 
-class OpenAIChatService:
-    def __init__(self) -> None:
-        self._client: openai.AsyncOpenAI | None = None
+class NvidiaChatService:
+    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+        self._client = client
 
     async def generate(
         self, messages: Sequence[ConversationMessage], pairing_token: str
     ) -> str:
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = os.getenv("NVIDIA_API_KEY", "").strip()
         if not api_key:
-            raise ModelProviderError("OPENAI_API_KEY is not configured")
+            raise ModelProviderError("NVIDIA_API_KEY is not configured")
 
-        if self._client is None:
-            self._client = openai.AsyncOpenAI(api_key=api_key)
+        payload = {
+            "model": os.getenv("NVIDIA_MODEL", "moonshotai/kimi-k3"),
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                *[message.model_dump() for message in messages],
+            ],
+            "max_tokens": 160,
+            "temperature": 1,
+            "stream": False,
+            "reasoning_effort": "max",
+        }
+        client = self._client or httpx.AsyncClient(timeout=60)
+        try:
+            response = await client.post(
+                "https://integrate.api.nvidia.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Accept": "application/json",
+                },
+                json=payload,
+            )
+            if response.status_code == 429:
+                raise RateLimitedError
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise ModelProviderError from error
+        finally:
+            if self._client is None:
+                await client.aclose()
 
         try:
-            response = await self._client.responses.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-5.6-sol"),
-                instructions=SYSTEM_PROMPT,
-                input=[message.model_dump() for message in messages],
-                max_output_tokens=160,
-                reasoning={"effort": "low"},
-                prompt_cache_key="metaglasses-v1",
-                safety_identifier=sha256(pairing_token.encode("utf-8")).hexdigest(),
-                store=False,
-            )
-        except openai.RateLimitError as error:
-            raise RateLimitedError from error
-        except openai.APIError as error:
-            raise ModelProviderError from error
-
-        text = response.output_text.strip()
+            text = response.json()["choices"][0]["message"]["content"].strip()
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
+            raise ModelProviderError("NVIDIA returned an invalid response") from error
         if not text:
-            raise ModelProviderError("OpenAI returned no text")
+            raise ModelProviderError("NVIDIA returned no text")
         return text
