@@ -81,6 +81,16 @@ https://PROJECT_REF.supabase.co/auth/v1/.well-known/jwks.json
 It validates the signature, algorithm, issuer, audience, expiry, issued-at time,
 subject, and authenticated role. It does not need a Supabase secret to do this.
 
+The hosted backend also uses PostgreSQL for short-lived pairing state. Apply the
+checked-in migrations to each hosted project, then set `DATABASE_URL` in the hosting
+platform's secret manager. The table is in the unexposed `app_private` schema and
+contains only a SHA-256 pairing-token hash, owner ID, lens state, expiry, and newest
+generated response. It does not contain conversation transcripts or audio.
+
+For a persistent Render service, use the Supabase session pooler connection string
+when the direct IPv6 endpoint is unavailable. Keep `sslmode=require` in the URL. The
+database password must be percent-encoded, and the full URL must never be committed.
+
 Copy the appropriate template and supply its real values through your deployment
 platform:
 

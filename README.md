@@ -10,9 +10,9 @@ Supabase access tokens outside local unit tests. It exposes these endpoints:
 - `GET /healthz`: reports the running environment and authentication mode.
 
 The service never accepts, stores, or returns audio. Conversation history remains
-on the phone. The in-memory pairing record expires one hour after the last phone
-request, so deploy v0.1 as one application instance. Use a shared TTL store before
-running more than one instance.
+on the phone. When `DATABASE_URL` is configured, pairing state is shared through a
+private PostgreSQL table and expires one hour after the last phone request. Without
+`DATABASE_URL`, the app uses the process-local store for local development.
 
 ## Environments
 
@@ -27,9 +27,9 @@ authentication bypass or with the local Supabase CLI stack.
 | `prod` | Hosted project 2 | Required | Production users |
 
 Authentication can be disabled only in `local`. Trial and production also reject
-wildcard CORS configuration. The backend only needs the public Supabase project URL
-to validate JWTs against its JWKS endpoint. Do not give it a service-role key for
-authentication.
+wildcard CORS configuration. The backend uses the public Supabase project URL to
+validate JWTs against its JWKS endpoint and `DATABASE_URL` for shared pairing state.
+Do not give it a service-role API key for authentication.
 
 Copy the appropriate committed template to an ignored environment file:
 
@@ -108,8 +108,9 @@ ghcr.io/adipat2003/metaglasses-backend:COMMIT_SHA
 GitHub stores and builds the image but does not run persistent web services. Deploy
 the published image to a container host and configure `APP_ENV`, `AUTH_MODE`,
 `SUPABASE_URL`, `SUPABASE_JWT_AUDIENCE`, `CORS_ORIGINS`, `OPENAI_API_KEY`, and
-optionally `OPENAI_MODEL` and `PAIRING_TTL_SECONDS` there. Run exactly one replica
-until the in-memory pairing store is replaced with a shared TTL store.
+`DATABASE_URL` there. `OPENAI_MODEL` and `PAIRING_TTL_SECONDS` are optional. Use the
+Supabase session pooler on IPv4-only persistent hosts and require SSL. Percent-encode
+special characters in the database password before constructing the URL.
 
 ## Pairing lifecycle
 
