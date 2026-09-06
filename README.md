@@ -68,9 +68,9 @@ initial integration.
 
 ## Run against Supabase Auth
 
-Use `.env.local-auth` with `supabase start`, or the trial/production environment file
-in its deployment. The mobile app signs in directly with Supabase and sends its access
-token:
+Use `.env.local-auth` with `supabase start`, `.env.docker` with `docker compose up`, or
+the trial/production environment file in its deployment. The mobile app signs in directly
+with Supabase and sends its access token:
 
 ```http
 Authorization: Bearer <supabase-access-token>

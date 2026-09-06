@@ -62,6 +62,7 @@ def protected_settings() -> Settings:
         app_env="trial",
         auth_mode="required",
         supabase_url="https://trial-project.supabase.co",
+        supabase_jwt_issuer=None,
         supabase_jwt_audience="authenticated",
         cors_origins=("https://trial.glance.example",),
     )

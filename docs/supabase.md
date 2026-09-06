@@ -135,6 +135,30 @@ environment must generate its own key rather than sharing private signing materi
 The CLI reports the local project URL and publishable key. The default API URL is
 `http://127.0.0.1:54321`, which already matches the local-auth template. Integration
 requests must obtain a local Supabase access token and send it as a bearer token.
+The template also connects the API to local Postgres on port `54322`, so pairing state
+persists across API restarts.
+
+## Run the API in Docker against local Auth and Postgres
+
+The Supabase CLI already runs local Auth and Postgres in Docker. The checked-in Compose
+file runs the FastAPI service alongside that stack without duplicating Supabase's managed
+containers. Start Supabase first, then create the Docker-specific application environment
+and run the API:
+
+```powershell
+Copy-Item .env.docker.example .env.docker
+npx --yes supabase@2.116.0 start
+docker compose up --build
+```
+
+The API is available at `http://127.0.0.1:8000`, Supabase Auth remains at
+`http://127.0.0.1:54321`, Postgres remains at `127.0.0.1:54322`, and Studio is at
+`http://127.0.0.1:54323`. Compose uses `host.docker.internal` to reach the Supabase
+ports from the API container, including a Linux host-gateway mapping. Its separate
+`SUPABASE_JWT_ISSUER` retains the host-facing issuer for strict JWT validation.
+
+Stop only the API with `docker compose down`. Stop the Supabase stack separately with
+`npx --yes supabase@2.116.0 stop` when it is no longer needed.
 
 ### Local Google and Apple provider credentials
 

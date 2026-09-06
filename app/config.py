@@ -17,6 +17,7 @@ class Settings:
     app_env: AppEnvironment
     auth_mode: AuthMode
     supabase_url: str | None
+    supabase_jwt_issuer: str | None
     supabase_jwt_audience: str
     cors_origins: tuple[str, ...]
     database_url: str | None = None
@@ -43,6 +44,14 @@ class Settings:
                 raise ConfigurationError("SUPABASE_URL must be an absolute HTTP(S) URL")
             if app_env in {"trial", "prod"} and parsed_url.scheme != "https":
                 raise ConfigurationError("Hosted environments require an HTTPS SUPABASE_URL")
+
+        supabase_jwt_issuer = values.get("SUPABASE_JWT_ISSUER", "").strip().rstrip("/") or None
+        if supabase_jwt_issuer:
+            parsed_issuer = urlparse(supabase_jwt_issuer)
+            if parsed_issuer.scheme not in {"http", "https"} or not parsed_issuer.netloc:
+                raise ConfigurationError("SUPABASE_JWT_ISSUER must be an absolute HTTP(S) URL")
+            if app_env in {"trial", "prod"} and parsed_issuer.scheme != "https":
+                raise ConfigurationError("Hosted environments require an HTTPS SUPABASE_JWT_ISSUER")
 
         origins = tuple(
             origin.strip()
@@ -73,6 +82,7 @@ class Settings:
             app_env=app_env,
             auth_mode=auth_mode,
             supabase_url=supabase_url,
+            supabase_jwt_issuer=supabase_jwt_issuer,
             supabase_jwt_audience=values.get("SUPABASE_JWT_AUDIENCE", "authenticated"),
             cors_origins=origins,
             database_url=database_url,

@@ -30,10 +30,10 @@ class SupabaseTokenVerifier:
     def __init__(self, settings: Settings) -> None:
         if not settings.supabase_url:
             raise ValueError("Supabase URL is required to construct a token verifier")
-        self._issuer = f"{settings.supabase_url}/auth/v1"
+        self._issuer = settings.supabase_jwt_issuer or f"{settings.supabase_url}/auth/v1"
         self._audience = settings.supabase_jwt_audience
         self._jwks = PyJWKClient(
-            f"{self._issuer}/.well-known/jwks.json",
+            f"{settings.supabase_url}/auth/v1/.well-known/jwks.json",
             cache_keys=True,
             lifespan=600,
         )
