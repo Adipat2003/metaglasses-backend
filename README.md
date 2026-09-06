@@ -94,11 +94,12 @@ uv run ruff check .
 uv run python -m pytest
 ```
 
-## CI and container publishing
+## CI and CD
 
-GitHub Actions runs linting, tests, and a production container build for every pull
-request and every push to `main`. After validation succeeds on `main`, the workflow
-publishes immutable commit and `latest` images to GitHub Container Registry:
+The `CI` workflow runs linting, tests, and a production container build for every pull
+request and every push to `main`. The separate `CD` workflow starts only after a
+successful `CI` push run on `main`. It publishes immutable commit and `latest` images
+to GitHub Container Registry and triggers the Trial Render deploy:
 
 ```text
 ghcr.io/adipat2003/metaglasses-backend:latest
@@ -134,19 +135,18 @@ the Trial hook as `RENDER_TRIAL_DEPLOY_HOOK_URL` in a GitHub environment named
 environment named `production`. Render deploy hooks are secrets and must never be
 committed.
 
-After a merge to `main`, GitHub validates the application and triggers the Trial
+After a merge to `main`, `CI` validates the application and `CD` triggers the Trial
 hook with that exact commit SHA. Render automatic deploys are disabled for both
-services so that Render cannot bypass the GitHub checks.
+services so that Render cannot bypass GitHub validation.
 
 Production can be released in either of two explicit ways:
 
 1. In Render, select `metaglasses-backend-prod`, choose **Manual Deploy**, and deploy
    the latest `main` commit.
-2. In GitHub Actions, run the `CI/CD` workflow from `main` with
-   `deploy_production=true`. Add the production service's Render deploy-hook URL as the
-   `RENDER_PROD_DEPLOY_HOOK_URL` secret in the `production` environment.
-   Configure required reviewers on that environment if the repository plan supports
-   them.
+2. In GitHub Actions, run the `CD` workflow from `main`. The workflow first confirms
+   that `CI` passed for the selected commit, then waits for the `production`
+   environment approval before triggering Render. Configure required reviewers on that
+   environment if the repository plan supports them.
 
 The deploy-hook URL is a secret. Never add it to `render.yaml`, a workflow file, or an
 untracked local environment file that might later be committed.
