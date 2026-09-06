@@ -3,7 +3,7 @@
 FastAPI service for the v0.1 phone-to-lens text loop. Phone endpoints use
 Supabase access tokens outside local unit tests. It exposes these endpoints:
 
-- `POST /v1/chat`: accepts a full text transcript, calls GPT-5.6 Sol, and stores only
+- `POST /v1/chat`: accepts a full text transcript, calls NVIDIA NIM, and stores only
   the newest response for the paired lens.
 - `GET /v1/display?token=...`: returns the newest response and phone-driven state.
 - `POST /v1/state`: updates the lens state without blocking the phone voice loop.
@@ -38,7 +38,7 @@ Copy-Item .env.local.example .env.local
 ```
 
 Replace placeholders in trial and production with the corresponding project URL and
-web client origin. Keep `OPENAI_API_KEY` and all future secrets in the untracked file
+web client origin. Keep `NVIDIA_API_KEY` and all future secrets in the untracked file
 or the deployment platform's secret manager.
 
 See [Supabase setup](docs/supabase.md) for the dashboard, signing-key, mobile-client,
@@ -59,8 +59,8 @@ uv run uvicorn app.main:app --reload --env-file .env.local
 The API is available at `http://127.0.0.1:8000`; FastAPI's interactive API page is
 at `http://127.0.0.1:8000/docs`.
 
-The default model is `gpt-5.6-sol`. Set `OPENAI_MODEL` to select another compatible
-OpenAI model after testing its latency and response quality.
+The default model is `moonshotai/kimi-k3`. Set `NVIDIA_MODEL` to select another model
+available through NVIDIA NIM after testing its latency and response quality.
 
 Set `CORS_ORIGINS` to the web app's deployed origin or a comma-separated allowlist
 before deployment. The local default is `*` to permit the separate web client during
@@ -107,8 +107,9 @@ ghcr.io/adipat2003/metaglasses-backend:COMMIT_SHA
 
 GitHub stores and builds the image but does not run persistent web services. Deploy
 the published image to a container host and configure `APP_ENV`, `AUTH_MODE`,
-`SUPABASE_URL`, `SUPABASE_JWT_AUDIENCE`, `CORS_ORIGINS`, `OPENAI_API_KEY`, and
-`DATABASE_URL` there. `OPENAI_MODEL` and `PAIRING_TTL_SECONDS` are optional. Use the
+`SUPABASE_URL`, `SUPABASE_JWT_AUDIENCE`, `CORS_ORIGINS`, `NVIDIA_API_KEY`, and
+`DATABASE_URL` there. `NVIDIA_MODEL`, `NVIDIA_BASE_URL`, and `PAIRING_TTL_SECONDS` are
+optional. Use the
 Supabase session pooler on IPv4-only persistent hosts and require SSL. Percent-encode
 special characters in the database password before constructing the URL.
 
@@ -124,7 +125,7 @@ services that track it:
 
 Sync `render.yaml` in the Render dashboard to create or update both services. Configure
 the four secret values separately on each service: `SUPABASE_URL`, `CORS_ORIGINS`,
-`DATABASE_URL`, and `OPENAI_API_KEY`. Trial and production must use their corresponding
+`DATABASE_URL`, and `NVIDIA_API_KEY`. Trial and production must use their corresponding
 Supabase projects and must not share database credentials.
 
 Production can be released in either of two explicit ways:
