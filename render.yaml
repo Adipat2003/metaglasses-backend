@@ -3,9 +3,10 @@ services:
     name: metaglasses-backend
     runtime: docker
     plan: free
+    branch: main
     dockerfilePath: ./Dockerfile
     healthCheckPath: /healthz
-    autoDeploy: true
+    autoDeployTrigger: "off"
     envVars:
       - key: APP_ENV
         value: trial
@@ -13,13 +14,47 @@ services:
         value: required
       - key: SUPABASE_JWT_AUDIENCE
         value: authenticated
-      - key: OPENAI_MODEL
-        value: gpt-5.6-sol
+      - key: NVIDIA_MODEL
+        value: moonshotai/kimi-k3
+      - key: NVIDIA_BASE_URL
+        value: https://integrate.api.nvidia.com/v1
       - key: PAIRING_TTL_SECONDS
         value: "3600"
       - key: SUPABASE_URL
         sync: false
       - key: CORS_ORIGINS
         sync: false
-      - key: OPENAI_API_KEY
+      - key: DATABASE_URL
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+
+  - type: web
+    name: metaglasses-backend-prod
+    runtime: docker
+    plan: free
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeployTrigger: "off"
+    envVars:
+      - key: APP_ENV
+        value: prod
+      - key: AUTH_MODE
+        value: required
+      - key: SUPABASE_JWT_AUDIENCE
+        value: authenticated
+      - key: NVIDIA_MODEL
+        value: moonshotai/kimi-k3
+      - key: NVIDIA_BASE_URL
+        value: https://integrate.api.nvidia.com/v1
+      - key: PAIRING_TTL_SECONDS
+        value: "3600"
+      - key: SUPABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: NVIDIA_API_KEY
         sync: false

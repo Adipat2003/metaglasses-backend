@@ -1,5 +1,6 @@
 import json
 from collections.abc import Sequence
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
@@ -16,8 +17,13 @@ from app.models import (
     HealthResponse,
     StateRequest,
 )
-from app.service import ChatService, ModelProviderError, OpenAIChatService, RateLimitedError
-from app.store import PairingOwnershipError, PairingStore
+from app.service import ChatService, ModelProviderError, NvidiaChatService, RateLimitedError
+from app.store import (
+    PairingOwnershipError,
+    PairingStore,
+    PairingStoreProtocol,
+    PostgresPairingStore,
+)
 
 MAX_TRANSCRIPT_BYTES = 256_000
 
@@ -56,16 +62,29 @@ def create_app(
     chat_service: ChatService | None = None,
     settings: Settings | None = None,
     token_verifier: TokenVerifier | None = None,
+    pairing_store: PairingStoreProtocol | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings.from_env()
+    store = pairing_store or _build_pairing_store(resolved_settings)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        if isinstance(store, PostgresPairingStore):
+            await store.open()
+        try:
+            yield
+        finally:
+            if isinstance(store, PostgresPairingStore):
+                await store.close()
+
     app = FastAPI(
         title="MetaGlasses API",
         version="0.1.0",
         description=(
             "Backend for the MetaGlasses phone-to-lens text loop. The phone authenticates "
             "with Supabase, submits conversation context and activity state, and the paired "
-            "lens polls for the newest short instruction. Pairing state is process-local in "
-            "v0.1, so deployments must use one application replica."
+            "lens polls for the newest short instruction. Pairing state uses PostgreSQL when "
+            "DATABASE_URL is configured and otherwise remains process-local."
         ),
         openapi_tags=OPENAPI_TAGS,
         servers=[{"url": "/", "description": "Current environment"}],
@@ -77,6 +96,7 @@ def create_app(
             "persistAuthorization": True,
             "tagsSorter": "alpha",
         },
+        lifespan=lifespan,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -86,8 +106,7 @@ def create_app(
         allow_headers=["Authorization", "Content-Type"],
     )
 
-    store = PairingStore()
-    service = chat_service or OpenAIChatService()
+    service = chat_service or NvidiaChatService()
     current_user = build_current_user_dependency(resolved_settings, token_verifier)
 
     @app.get(
@@ -97,7 +116,7 @@ def create_app(
         description=(
             "Confirms that the FastAPI process is responding and reports the selected "
             "application environment and authentication mode. This is a liveness check; "
-            "it does not test OpenAI or Supabase connectivity."
+            "it does not test NVIDIA or Supabase connectivity."
         ),
         response_description="Current process health and runtime mode.",
         response_model=HealthResponse,
@@ -145,7 +164,7 @@ def create_app(
         except PairingOwnershipError as error:
             raise _pairing_forbidden() from error
         try:
-            text = await service.generate(request.messages, request.pairing_token)
+            text = await service.generate(request.messages)
         except RateLimitedError as error:
             await store.set_state(request.pairing_token, "idle", user.id)
             raise HTTPException(
@@ -226,6 +245,12 @@ def create_app(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return app
+
+
+def _build_pairing_store(settings: Settings) -> PairingStoreProtocol:
+    if settings.database_url:
+        return PostgresPairingStore(settings.database_url)
+    return PairingStore()
 
 
 def _pairing_forbidden() -> HTTPException:

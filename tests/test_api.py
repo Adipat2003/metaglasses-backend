@@ -1,14 +1,15 @@
 import asyncio
+import json
 from collections.abc import Sequence
-from types import SimpleNamespace
 
+import httpx
 from fastapi.testclient import TestClient
 
 from app.auth import AccessTokenError, AuthenticatedUser
 from app.config import Settings
 from app.main import MAX_TRANSCRIPT_BYTES, create_app
 from app.models import ConversationMessage
-from app.service import ModelProviderError, OpenAIChatService, RateLimitedError
+from app.service import ModelProviderError, NvidiaChatService, RateLimitedError
 
 TOKEN = "a3f9d1e2c3b4a5f60718293a4b5c6d7e"
 
@@ -18,7 +19,7 @@ class FakeChatService:
         self.result = result
         self.messages: list[ConversationMessage] | None = None
 
-    async def generate(self, messages: Sequence[ConversationMessage], pairing_token: str) -> str:
+    async def generate(self, messages: Sequence[ConversationMessage]) -> str:
         self.messages = list(messages)
         return self.result
 
@@ -27,22 +28,8 @@ class FailingChatService:
     def __init__(self, error: Exception) -> None:
         self.error = error
 
-    async def generate(self, messages: Sequence[ConversationMessage], pairing_token: str) -> str:
+    async def generate(self, messages: Sequence[ConversationMessage]) -> str:
         raise self.error
-
-
-class FakeResponsesClient:
-    def __init__(self) -> None:
-        self.request: dict[str, object] | None = None
-
-    async def create(self, **kwargs: object) -> SimpleNamespace:
-        self.request = kwargs
-        return SimpleNamespace(output_text="Use your tire levers to lift the bead off the rim.")
-
-
-class FakeOpenAIClient:
-    def __init__(self) -> None:
-        self.responses = FakeResponsesClient()
 
 
 class FakeTokenVerifier:
@@ -62,6 +49,7 @@ def protected_settings() -> Settings:
         app_env="trial",
         auth_mode="required",
         supabase_url="https://trial-project.supabase.co",
+        supabase_jwt_issuer=None,
         supabase_jwt_audience="authenticated",
         cors_origins=("https://trial.glance.example",),
     )
@@ -234,18 +222,36 @@ def test_rate_limit_and_provider_errors_are_mapped_to_contract_statuses() -> Non
     assert unavailable.post("/v1/chat", json=payload).status_code == 503
 
 
-def test_openai_service_uses_sol_with_ephemeral_response_storage(monkeypatch) -> None:
-    client = FakeOpenAIClient()
-    service = OpenAIChatService()
-    service._client = client
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+def test_nvidia_service_uses_kimi_chat_completions(monkeypatch) -> None:
+    captured_request: httpx.Request | None = None
 
-    text = asyncio.run(
-        service.generate([ConversationMessage(role="user", content="help")], TOKEN)
-    )
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_request
+        captured_request = request
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": "Use your tire levers to lift the bead."}}
+                ]
+            },
+        )
 
-    assert text == "Use your tire levers to lift the bead off the rim."
-    assert client.responses.request is not None
-    assert client.responses.request["model"] == "gpt-5.6-sol"
-    assert client.responses.request["reasoning"] == {"effort": "low"}
-    assert client.responses.request["store"] is False
+    async def invoke() -> str:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            service = NvidiaChatService(client)
+            return await service.generate(
+                [ConversationMessage(role="user", content="help")]
+            )
+
+    monkeypatch.setenv("NVIDIA_API_KEY", "test-key")
+    text = asyncio.run(invoke())
+
+    assert text == "Use your tire levers to lift the bead."
+    assert captured_request is not None
+    assert captured_request.url == "https://integrate.api.nvidia.com/v1/chat/completions"
+    assert captured_request.headers["authorization"] == "Bearer test-key"
+    payload = json.loads(captured_request.content)
+    assert payload["model"] == "moonshotai/kimi-k3"
+    assert payload["messages"][-1] == {"role": "user", "content": "help"}
+    assert payload["stream"] is False

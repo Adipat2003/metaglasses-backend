@@ -1,0 +1,11 @@
+services:
+  api:
+    build:
+      context: .
+    env_file:
+      - path: ${API_ENV_FILE:-.env.docker}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - "8000:10000"
+    restart: unless-stopped

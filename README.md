@@ -3,16 +3,16 @@
 FastAPI service for the v0.1 phone-to-lens text loop. Phone endpoints use
 Supabase access tokens outside local unit tests. It exposes these endpoints:
 
-- `POST /v1/chat`: accepts a full text transcript, calls GPT-5.6 Sol, and stores only
+- `POST /v1/chat`: accepts a full text transcript, calls NVIDIA NIM, and stores only
   the newest response for the paired lens.
 - `GET /v1/display?token=...`: returns the newest response and phone-driven state.
 - `POST /v1/state`: updates the lens state without blocking the phone voice loop.
 - `GET /healthz`: reports the running environment and authentication mode.
 
 The service never accepts, stores, or returns audio. Conversation history remains
-on the phone. The in-memory pairing record expires one hour after the last phone
-request, so deploy v0.1 as one application instance. Use a shared TTL store before
-running more than one instance.
+on the phone. When `DATABASE_URL` is configured, pairing state is shared through a
+private PostgreSQL table and expires one hour after the last phone request. Without
+`DATABASE_URL`, the app uses the process-local store for local development.
 
 ## Environments
 
@@ -27,9 +27,9 @@ authentication bypass or with the local Supabase CLI stack.
 | `prod` | Hosted project 2 | Required | Production users |
 
 Authentication can be disabled only in `local`. Trial and production also reject
-wildcard CORS configuration. The backend only needs the public Supabase project URL
-to validate JWTs against its JWKS endpoint. Do not give it a service-role key for
-authentication.
+wildcard CORS configuration. The backend uses the public Supabase project URL to
+validate JWTs against its JWKS endpoint and `DATABASE_URL` for shared pairing state.
+Do not give it a service-role API key for authentication.
 
 Copy the appropriate committed template to an ignored environment file:
 
@@ -38,7 +38,7 @@ Copy-Item .env.local.example .env.local
 ```
 
 Replace placeholders in trial and production with the corresponding project URL and
-web client origin. Keep `OPENAI_API_KEY` and all future secrets in the untracked file
+web client origin. Keep `NVIDIA_API_KEY` and all future secrets in the untracked file
 or the deployment platform's secret manager.
 
 See [Supabase setup](docs/supabase.md) for the dashboard, signing-key, mobile-client,
@@ -59,8 +59,8 @@ uv run uvicorn app.main:app --reload --env-file .env.local
 The API is available at `http://127.0.0.1:8000`; FastAPI's interactive API page is
 at `http://127.0.0.1:8000/docs`.
 
-The default model is `gpt-5.6-sol`. Set `OPENAI_MODEL` to select another compatible
-OpenAI model after testing its latency and response quality.
+The default model is `moonshotai/kimi-k3`. Set `NVIDIA_MODEL` to select another model
+available through NVIDIA NIM after testing its latency and response quality.
 
 Set `CORS_ORIGINS` to the web app's deployed origin or a comma-separated allowlist
 before deployment. The local default is `*` to permit the separate web client during
@@ -68,9 +68,9 @@ initial integration.
 
 ## Run against Supabase Auth
 
-Use `.env.local-auth` with `supabase start`, or the trial/production environment file
-in its deployment. The mobile app signs in directly with Supabase and sends its access
-token:
+Use `.env.local-auth` with `supabase start`, `.env.docker` with `docker compose up`, or
+the trial/production environment file in its deployment. The mobile app signs in directly
+with Supabase and sends its access token:
 
 ```http
 Authorization: Bearer <supabase-access-token>
@@ -107,9 +107,49 @@ ghcr.io/adipat2003/metaglasses-backend:COMMIT_SHA
 
 GitHub stores and builds the image but does not run persistent web services. Deploy
 the published image to a container host and configure `APP_ENV`, `AUTH_MODE`,
-`SUPABASE_URL`, `SUPABASE_JWT_AUDIENCE`, `CORS_ORIGINS`, `OPENAI_API_KEY`, and
-optionally `OPENAI_MODEL` and `PAIRING_TTL_SECONDS` there. Run exactly one replica
-until the in-memory pairing store is replaced with a shared TTL store.
+`SUPABASE_URL`, `SUPABASE_JWT_AUDIENCE`, `CORS_ORIGINS`, `NVIDIA_API_KEY`, and
+`DATABASE_URL` there. `NVIDIA_MODEL`, `NVIDIA_BASE_URL`, and `PAIRING_TTL_SECONDS` are
+optional. Use the
+Supabase session pooler on IPv4-only persistent hosts and require SSL. Percent-encode
+special characters in the database password before constructing the URL.
+
+## Render deployment environments
+
+The repository's default branch is `main`. The Render Blueprint defines two Docker
+services that track it:
+
+| Service | Environment | Deployment policy |
+| --- | --- | --- |
+| `metaglasses-backend` | Trial | GitHub Actions deploys each validated `main` push |
+| `metaglasses-backend-prod` | Production | GitHub Actions deploys only on manual dispatch |
+
+Sync `render.yaml` in the Render dashboard to create or update both services. Configure
+the four secret values separately on each service: `SUPABASE_URL`, `CORS_ORIGINS`,
+`DATABASE_URL`, and `NVIDIA_API_KEY`. Trial and production must use their corresponding
+Supabase projects and must not share database credentials.
+
+In each Render service, create a deploy hook under **Settings > Deploy Hook**. Store
+the Trial hook as `RENDER_TRIAL_DEPLOY_HOOK_URL` in a GitHub environment named
+`trial`. Store the Production hook as `RENDER_PROD_DEPLOY_HOOK_URL` in a GitHub
+environment named `production`. Render deploy hooks are secrets and must never be
+committed.
+
+After a merge to `main`, GitHub validates the application and triggers the Trial
+hook with that exact commit SHA. Render automatic deploys are disabled for both
+services so that Render cannot bypass the GitHub checks.
+
+Production can be released in either of two explicit ways:
+
+1. In Render, select `metaglasses-backend-prod`, choose **Manual Deploy**, and deploy
+   the latest `main` commit.
+2. In GitHub Actions, run the `CI/CD` workflow from `main` with
+   `deploy_production=true`. Add the production service's Render deploy-hook URL as the
+   `RENDER_PROD_DEPLOY_HOOK_URL` secret in the `production` environment.
+   Configure required reviewers on that environment if the repository plan supports
+   them.
+
+The deploy-hook URL is a secret. Never add it to `render.yaml`, a workflow file, or an
+untracked local environment file that might later be committed.
 
 ## Pairing lifecycle
 

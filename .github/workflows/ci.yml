@@ -6,13 +6,19 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      deploy_production:
+        description: Deploy the selected revision to the production Render service
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   validate:
@@ -82,3 +88,60 @@ jobs:
             ghcr.io/adipat2003/metaglasses-backend:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy-trial:
+    name: Deploy trial
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: deploy-trial
+      cancel-in-progress: true
+    environment:
+      name: trial
+      url: https://metaglasses-backend.onrender.com
+
+    steps:
+      - name: Trigger Render trial deploy
+        env:
+          GIT_COMMIT_SHA: ${{ github.sha }}
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_TRIAL_DEPLOY_HOOK_URL }}
+        run: |
+          test -n "$RENDER_DEPLOY_HOOK_URL"
+          case "$RENDER_DEPLOY_HOOK_URL" in
+            *\?*) separator='&' ;;
+            *) separator='?' ;;
+          esac
+          curl --fail-with-body --request POST \
+            "${RENDER_DEPLOY_HOOK_URL}${separator}ref=${GIT_COMMIT_SHA}"
+
+  deploy-production:
+    name: Deploy production
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.deploy_production &&
+      github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://metaglasses-backend-prod.onrender.com
+
+    steps:
+      - name: Trigger Render production deploy
+        env:
+          GIT_COMMIT_SHA: ${{ github.sha }}
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_PROD_DEPLOY_HOOK_URL }}
+        run: |
+          test -n "$RENDER_DEPLOY_HOOK_URL"
+          case "$RENDER_DEPLOY_HOOK_URL" in
+            *\?*) separator='&' ;;
+            *) separator='?' ;;
+          esac
+          curl --fail-with-body --request POST \
+            "${RENDER_DEPLOY_HOOK_URL}${separator}ref=${GIT_COMMIT_SHA}"

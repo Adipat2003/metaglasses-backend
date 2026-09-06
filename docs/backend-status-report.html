@@ -213,35 +213,35 @@
     <h1>MetaGlasses Backend</h1>
     <p class="subtitle">Current architecture, delivered capabilities, security posture, operational constraints, and prioritized path to production.</p>
     <div class="meta">
-      <p><strong>Report date</strong> September 4, 2026</p>
+      <p><strong>Report date</strong> September 6, 2026</p>
       <p><strong>Version</strong> 0.1.0</p>
       <p><strong>Baseline commit</strong> a88f3ef560977977e4a97d59cf16946686f1c0c1</p>
       <p><strong>Repository</strong> github.com/Adipat2003/metaglasses-backend</p>
       <p><strong>Scope</strong> FastAPI backend and delivery pipeline</p>
     </div>
-    <p class="cover-note">Prepared from the verified repository state, local runtime, automated tests, GitHub configuration, official Supabase documentation, and official OpenAI documentation.</p>
+    <p class="cover-note">Prepared from the verified repository state, local runtime, automated tests, GitHub configuration, official Supabase documentation, and official NVIDIA documentation.</p>
   </section>
 
   <section>
     <h2>Executive summary</h2>
-    <p>The MetaGlasses backend is a functional v0.1 FastAPI service for a phone-to-lens text-assistance loop. It accepts a phone-maintained conversation transcript, asks OpenAI for one concise next step, and exposes the newest answer to a paired lens. Supabase is used strictly as the identity provider. Pairing and display state remain process-local.</p>
+    <p>The MetaGlasses backend is a functional v0.1 FastAPI service for a phone-to-lens text-assistance loop. It accepts a phone-maintained conversation transcript, asks NVIDIA NIM for one concise next step, and exposes the newest answer to a paired lens. Supabase provides identity and PostgreSQL persistence for hosted environments.</p>
 
     <div class="status-grid">
       <div class="status-card"><div class="label">Local API</div><div class="value done">Running and healthy</div></div>
-      <div class="status-card"><div class="label">Automated tests</div><div class="value done">21 passing</div></div>
+      <div class="status-card"><div class="label">Automated tests</div><div class="value done">29 passing</div></div>
       <div class="status-card"><div class="label">GitHub CI/CD</div><div class="value done">Passing</div></div>
       <div class="status-card"><div class="label">Production image</div><div class="value done">Published to GHCR</div></div>
-      <div class="status-card"><div class="label">Hosted backend</div><div class="value pending">Not deployed</div></div>
-      <div class="status-card"><div class="label">Hosted Supabase projects</div><div class="value pending">Production connected; trial pending</div></div>
+      <div class="status-card"><div class="label">Hosted backend</div><div class="value done">Trial deployed</div></div>
+      <div class="status-card"><div class="label">Hosted Supabase projects</div><div class="value done">Trial and production connected</div></div>
     </div>
 
     <div class="callout good">
       <strong>What is ready</strong>
-      The API contract, local runtime, JWT verification, OpenAI request path, error mapping, in-memory pairing flow, container image, GitHub validation, container publishing, and protected main branch are operational.
+      The API contract, local runtime, JWT verification, NVIDIA NIM request path, error mapping, PostgreSQL pairing flow, container image, GitHub validation, container publishing, and protected main branch are operational.
     </div>
     <div class="callout risk">
-      <strong>Primary production blocker</strong>
-      There is no persistent backend hosting target, the trial environment is not configured, and pairing state is lost on process restart. A single replica is mandatory until state moves to a shared TTL store.
+      <strong>Primary production task</strong>
+      Production secrets and an explicit release must be configured on Render before traffic is enabled. Pairing state uses PostgreSQL when <code>DATABASE_URL</code> is configured.
     </div>
 
     <h3>Contents</h3>
@@ -249,7 +249,7 @@
       <tr><td>1</td><td>System purpose and architecture</td></tr>
       <tr><td>2</td><td>API contract and request lifecycle</td></tr>
       <tr><td>3</td><td>Supabase authentication</td></tr>
-      <tr><td>4</td><td>OpenAI model integration</td></tr>
+      <tr><td>4</td><td>NVIDIA model integration</td></tr>
       <tr><td>5</td><td>Pairing state and data lifecycle</td></tr>
       <tr><td>6</td><td>Configuration and environments</td></tr>
       <tr><td>7</td><td>Container, GitHub CI/CD, and repository controls</td></tr>
@@ -262,21 +262,21 @@
 
   <section class="section">
     <h2>1. System purpose and architecture</h2>
-    <p>The service supports a deliberately narrow interaction model. A phone owns conversation history and voice interaction, while the lens receives only short text and a simple activity state. The backend is the trust boundary between authenticated phone traffic, the OpenAI model provider, and unauthenticated lens polling.</p>
+    <p>The service supports a deliberately narrow interaction model. A phone owns conversation history and voice interaction, while the lens receives only short text and a simple activity state. The backend is the trust boundary between authenticated phone traffic, the NVIDIA model endpoint, and unauthenticated lens polling.</p>
 
     <div class="flow avoid-break">
       <div class="flow-box"><strong>Mobile phone</strong><br>Supabase sign-in<br>Transcript and state</div>
       <div class="flow-arrow">&#8594;</div>
       <div class="flow-box"><strong>FastAPI</strong><br>JWT validation<br>Pairing ownership<br>Model orchestration</div>
       <div class="flow-arrow">&#8594;</div>
-      <div class="flow-box"><strong>OpenAI</strong><br>Responses API<br>One short text step</div>
+      <div class="flow-box"><strong>NVIDIA NIM</strong><br>Chat Completions API<br>One short text step</div>
     </div>
     <div class="flow avoid-break">
       <div class="flow-box"><strong>Lens client</strong><br>Poll by pairing token</div>
       <div class="flow-arrow">&#8594;</div>
       <div class="flow-box"><strong>Display endpoint</strong><br>Newest response and state</div>
       <div class="flow-arrow">&#8594;</div>
-      <div class="flow-box"><strong>Memory store</strong><br>One process<br>One-hour TTL</div>
+      <div class="flow-box"><strong>Pairing store</strong><br>PostgreSQL hosted<br>One-hour TTL</div>
     </div>
 
     <h3>Component map</h3>
@@ -286,7 +286,7 @@
         <tr><td><code>app/main.py</code></td><td>Application factory, middleware, routes, status-code mapping, dependency composition</td><td>FastAPI</td></tr>
         <tr><td><code>app/models.py</code></td><td>Request and response validation, API naming aliases, state vocabulary</td><td>Pydantic</td></tr>
         <tr><td><code>app/auth.py</code></td><td>Bearer extraction and Supabase access-token verification</td><td>PyJWT and remote JWKS</td></tr>
-        <tr><td><code>app/service.py</code></td><td>Prompt policy and OpenAI Responses API call</td><td>Async OpenAI SDK</td></tr>
+        <tr><td><code>app/service.py</code></td><td>Prompt policy and NVIDIA NIM API call</td><td>Async HTTPX client</td></tr>
         <tr><td><code>app/store.py</code></td><td>Pairing ownership, state changes, expiration, newest display response</td><td>Async in-memory dictionary</td></tr>
         <tr><td><code>app/config.py</code></td><td>Environment parsing and unsafe-configuration rejection</td><td>Typed dataclass</td></tr>
       </tbody>
@@ -297,8 +297,7 @@
       <li>The backend does not accept, store, or return audio.</li>
       <li>The backend does not retain the conversation transcript.</li>
       <li>The backend does not expose login, signup, or refresh-token endpoints.</li>
-      <li>The backend does not use Supabase Postgres, Storage, Realtime, or service-role credentials.</li>
-      <li>The backend does not currently integrate NVIDIA APIs or the previously supplied NVIDIA example.</li>
+      <li>The backend uses Supabase Postgres for hosted pairing state and does not require Storage, Realtime, or service-role credentials.</li>
       <li>The backend returns one complete text response rather than streaming partial output.</li>
     </ul>
   </section>
@@ -344,7 +343,7 @@
     <ol>
       <li>FastAPI and Pydantic validate the bearer header, pairing token, messages, and transcript size.</li>
       <li>The store registers or verifies pairing ownership and changes the state to <code>thinking</code>.</li>
-      <li>The chat service submits the entire supplied transcript and fixed system instruction to OpenAI.</li>
+      <li>The chat service submits the entire supplied transcript and fixed system instruction to NVIDIA NIM.</li>
       <li>A provider rate limit becomes HTTP 429. A missing key, API error, or empty model output becomes HTTP 503.</li>
       <li>On provider failure, the state returns to <code>idle</code>.</li>
       <li>On success, a new response ID and UTC timestamp are created, the state becomes <code>speaking</code>, and the newest text is saved.</li>
@@ -429,23 +428,22 @@ Content-Type: application/json
   </section>
 
   <section class="section">
-    <h2>4. OpenAI model integration</h2>
+    <h2>4. NVIDIA model integration</h2>
     <h3>Delivered request configuration</h3>
     <table>
       <thead><tr><th>Setting</th><th>Current value</th><th>Intent</th></tr></thead>
       <tbody>
-        <tr><td>API</td><td>Responses API</td><td>Modern OpenAI response interface</td></tr>
-        <tr><td>Client</td><td><code>openai.AsyncOpenAI</code></td><td>Non-blocking route execution</td></tr>
-        <tr><td>Default model</td><td><code>gpt-5.6-sol</code></td><td>High-quality instruction generation</td></tr>
-        <tr><td>Reasoning</td><td><code>low</code></td><td>Favor response latency for one-step guidance</td></tr>
+        <tr><td>API</td><td>Chat Completions API</td><td>NVIDIA-hosted model inference</td></tr>
+        <tr><td>Client</td><td><code>httpx.AsyncClient</code></td><td>Non-blocking route execution</td></tr>
+        <tr><td>Default model</td><td><code>moonshotai/kimi-k3</code></td><td>Concise instruction generation</td></tr>
+        <tr><td>Temperature</td><td><code>0.2</code></td><td>Favor focused one-step guidance</td></tr>
         <tr><td>Output budget</td><td>160 tokens</td><td>Constrain lens output</td></tr>
-        <tr><td>Response storage</td><td><code>false</code></td><td>Do not retain responses for later API retrieval</td></tr>
-        <tr><td>Prompt cache key</td><td><code>metaglasses-v1</code></td><td>Improve reuse for common prompt prefixes</td></tr>
-        <tr><td>Safety identifier</td><td>SHA-256 hash of pairing token</td><td>Stable pseudonymous identifier without sending raw token</td></tr>
+        <tr><td>Streaming</td><td><code>false</code></td><td>Return one complete lens instruction</td></tr>
+        <tr><td>Pairing identifier</td><td>Not sent</td><td>Keep pairing credentials out of provider requests</td></tr>
       </tbody>
     </table>
 
-    <p>Official OpenAI documentation confirms that GPT-5.6 Sol supports the Responses API, text input and output, image input, streaming, structured output, and reasoning efforts including low. The application currently uses only text input and complete text output.</p>
+    <p>Official NVIDIA documentation lists <code>moonshotai/kimi-k3</code> on the hosted chat-completions endpoint. The application uses text input and complete text output.</p>
 
     <h3>Prompt policy</h3>
     <p>The fixed instruction defines the assistant as a step-by-step voice assistant and requires exactly one practical next step in one short plain-text sentence. Markdown, preambles, and follow-up questions are discouraged except when safety requires clarification.</p>
@@ -453,26 +451,26 @@ Content-Type: application/json
     <h3>Data behavior</h3>
     <ul>
       <li>The phone supplies the complete conversation history on each chat request.</li>
-      <li>The backend forwards that supplied transcript to OpenAI.</li>
+      <li>The backend forwards that supplied transcript to NVIDIA NIM.</li>
       <li>The backend does not write the transcript to its own store.</li>
-      <li>The raw pairing token is hashed before use as the safety identifier.</li>
-      <li>The generated response is stored only in process memory for lens retrieval.</li>
+      <li>The pairing token is not sent to the model provider.</li>
+      <li>The generated response is stored in PostgreSQL when configured, or process memory locally.</li>
     </ul>
 
     <h3>Provider failure mapping</h3>
     <table>
       <thead><tr><th>Condition</th><th>Backend result</th></tr></thead>
       <tbody>
-        <tr><td><code>OPENAI_API_KEY</code> missing</td><td>503 Model provider unavailable</td></tr>
-        <tr><td>OpenAI rate limit</td><td>429 with retry guidance</td></tr>
-        <tr><td>Other OpenAI API error</td><td>503</td></tr>
+        <tr><td><code>NVIDIA_API_KEY</code> missing</td><td>503 Model provider unavailable</td></tr>
+        <tr><td>NVIDIA rate limit</td><td>429 with retry guidance</td></tr>
+        <tr><td>Other NVIDIA API error</td><td>503</td></tr>
         <tr><td>Empty model output</td><td>503</td></tr>
       </tbody>
     </table>
 
     <div class="callout warn">
       <strong>Current local limitation</strong>
-      The local environment has no OpenAI key configured. Health and pairing endpoints work, but a real local chat request returns HTTP 503 until a valid key is supplied outside version control.
+      The local environment needs an NVIDIA key for real chat requests. Health and pairing endpoints work without one, but chat returns HTTP 503 until a valid key is supplied outside version control.
     </div>
   </section>
 
@@ -521,8 +519,9 @@ Content-Type: application/json
         <tr><td><code>SUPABASE_URL</code></td><td>Authentication required</td><td>Defines issuer and public JWKS host</td></tr>
         <tr><td><code>SUPABASE_JWT_AUDIENCE</code></td><td>Optional</td><td>Defaults to authenticated</td></tr>
         <tr><td><code>CORS_ORIGINS</code></td><td>Always</td><td>Comma-separated client origin allowlist</td></tr>
-        <tr><td><code>OPENAI_API_KEY</code></td><td>Real chat requests</td><td>Server-side OpenAI credential</td></tr>
-        <tr><td><code>OPENAI_MODEL</code></td><td>Optional</td><td>Defaults to GPT-5.6 Sol</td></tr>
+        <tr><td><code>NVIDIA_API_KEY</code></td><td>Real chat requests</td><td>Server-side NVIDIA credential</td></tr>
+        <tr><td><code>NVIDIA_MODEL</code></td><td>Optional</td><td>Defaults to moonshotai/kimi-k3</td></tr>
+        <tr><td><code>NVIDIA_BASE_URL</code></td><td>Optional</td><td>Defaults to the NVIDIA hosted endpoint</td></tr>
         <tr><td><code>PAIRING_TTL_SECONDS</code></td><td>Optional</td><td>Defaults to 3,600 seconds</td></tr>
       </tbody>
     </table>
@@ -612,7 +611,7 @@ ghcr.io/adipat2003/metaglasses-backend:&lt;full-git-commit-sha&gt;</pre>
     <h3>Verified results</h3>
     <div class="status-grid">
       <div class="status-card"><div class="label">Ruff</div><div class="value done">Passed</div></div>
-      <div class="status-card"><div class="label">Pytest</div><div class="value done">20 passed</div></div>
+      <div class="status-card"><div class="label">Pytest</div><div class="value done">29 passed</div></div>
       <div class="status-card"><div class="label">GitHub Docker build</div><div class="value done">Passed</div></div>
       <div class="status-card"><div class="label">Live local health</div><div class="value done">HTTP 200</div></div>
     </div>
@@ -628,14 +627,14 @@ ghcr.io/adipat2003/metaglasses-backend:&lt;full-git-commit-sha&gt;</pre>
       <li>Chat generation and lens response consistency.</li>
       <li>Transcript byte-size enforcement.</li>
       <li>Rate-limit and provider-failure status mapping.</li>
-      <li>OpenAI model, reasoning, and response-storage options.</li>
+      <li>NVIDIA model, endpoint, request options, and response parsing.</li>
       <li>Environment, CORS, Supabase URL, and HTTPS validation.</li>
     </ul>
 
     <h3>Testing gaps</h3>
     <ul>
       <li>No real Supabase login and JWT smoke test.</li>
-      <li>No real OpenAI request in CI.</li>
+      <li>No real NVIDIA request in CI.</li>
       <li>No end-to-end phone-to-lens test.</li>
       <li>No concurrency or load testing.</li>
       <li>No coverage threshold or coverage report.</li>
@@ -656,7 +655,7 @@ ghcr.io/adipat2003/metaglasses-backend:&lt;full-git-commit-sha&gt;</pre>
         <tr><td>Identity</td><td>Asymmetric JWT verification checks issuer, audience, lifetime, subject, and role.</td></tr>
         <tr><td>Authorization</td><td>Pairing ownership prevents a second authenticated user from reusing an active token.</td></tr>
         <tr><td>Hosted configuration</td><td>Authentication bypass and wildcard CORS are rejected outside safe environments.</td></tr>
-        <tr><td>Provider privacy</td><td>OpenAI response storage is disabled and pairing identifiers are hashed.</td></tr>
+        <tr><td>Provider privacy</td><td>Pairing identifiers are not sent to the model endpoint.</td></tr>
         <tr><td>Container</td><td>Runs as non-root with production dependencies only.</td></tr>
         <tr><td>Supply chain</td><td>Python lockfile is committed and GitHub Actions are pinned to full commits.</td></tr>
         <tr><td>Source control</td><td>Main is protected from direct unvalidated history changes.</td></tr>
@@ -687,18 +686,18 @@ ghcr.io/adipat2003/metaglasses-backend:&lt;full-git-commit-sha&gt;</pre>
       <tbody>
         <tr><td><span class="priority p0">P0</span></td><td>Select a runtime host</td><td>One persistent container instance with HTTPS and stable public URL</td><td>Public health request returns 200</td></tr>
         <tr><td><span class="priority p0">P0</span></td><td>Create trial Supabase project</td><td>Real URL, ES256 signing key, email policy, site URL, and redirect allowlist</td><td>Real trial JWT accepted</td></tr>
-        <tr><td><span class="priority p0">P0</span></td><td>Configure hosted secrets</td><td>APP_ENV, AUTH_MODE, Supabase URL, CORS, OpenAI key, model, and TTL stored by host</td><td>No secret in image or repository</td></tr>
+        <tr><td><span class="priority p0">P0</span></td><td>Configure hosted secrets</td><td>APP_ENV, AUTH_MODE, Supabase URL, CORS, NVIDIA key, model, and TTL stored by host</td><td>No secret in image or repository</td></tr>
         <tr><td><span class="priority p0">P0</span></td><td>Add deployment job</td><td>Successful main build deploys immutable image to trial</td><td>Deployment status and health gate pass</td></tr>
         <tr><td><span class="priority p0">P0</span></td><td>Connect mobile auth</td><td>Direct Supabase sign-in, secure refresh-token storage, refresh, and bearer injection</td><td>Device end-to-end test passes</td></tr>
         <tr><td><span class="priority p0">P0</span></td><td>Protect pairing capability</td><td>Random generation, secure transfer, log redaction, and expiry behavior documented</td><td>Logs contain no full token</td></tr>
         <tr><td><span class="priority p1">P1</span></td><td>Add rate limiting</td><td>Per-user and per-IP budgets around chat requests</td><td>Deterministic 429 tests</td></tr>
         <tr><td><span class="priority p1">P1</span></td><td>Add observability</td><td>Structured logs, request IDs, latency, error rate, provider failures, alerts</td><td>Dashboard and alert test</td></tr>
-        <tr><td><span class="priority p1">P1</span></td><td>Add live integration checks</td><td>Controlled Supabase JWT and OpenAI smoke tests outside pull requests</td><td>Scheduled workflow passes</td></tr>
+        <tr><td><span class="priority p1">P1</span></td><td>Add live integration checks</td><td>Controlled Supabase JWT and NVIDIA smoke tests outside pull requests</td><td>Scheduled workflow passes</td></tr>
         <tr><td><span class="priority p1">P1</span></td><td>Define rollback</td><td>Immutable image deployment and documented rollback command</td><td>Rollback drill passes</td></tr>
         <tr><td><span class="priority p1">P1</span></td><td>Harden CI</td><td>Coverage threshold, type checking, dependency review, and image scan</td><td>Required checks enforced</td></tr>
         <tr><td><span class="priority p2">P2</span></td><td>Shared pairing store</td><td>Durable or ephemeral shared TTL state with atomic ownership operations</td><td>Multi-replica test passes</td></tr>
         <tr><td><span class="priority p2">P2</span></td><td>Readiness and shutdown</td><td>Dependency readiness, graceful shutdown, and deployment drain behavior</td><td>Failure-mode test passes</td></tr>
-        <tr><td><span class="priority p2">P2</span></td><td>Load and cost testing</td><td>Latency, throughput, memory, and OpenAI cost envelope documented</td><td>Target service levels met</td></tr>
+        <tr><td><span class="priority p2">P2</span></td><td>Load and cost testing</td><td>Latency, throughput, memory, and NVIDIA cost envelope documented</td><td>Target service levels met</td></tr>
         <tr><td><span class="priority p3">P3</span></td><td>Streaming</td><td>Optional partial-response delivery if product latency requires it</td><td>Client compatibility test</td></tr>
         <tr><td><span class="priority p3">P3</span></td><td>Multimodal input</td><td>Explicit image or audio contract if product requirements expand</td><td>Privacy and cost review</td></tr>
       </tbody>
@@ -737,8 +736,8 @@ ghcr.io/adipat2003/metaglasses-backend:&lt;full-git-commit-sha&gt;</pre>
       <tbody>
         <tr><td>&#9745;</td><td>API contract implemented</td><td>Four documented FastAPI endpoints</td></tr>
         <tr><td>&#9745;</td><td>JWT authentication implemented</td><td>Supabase public JWKS verification</td></tr>
-        <tr><td>&#9745;</td><td>Provider integration implemented</td><td>OpenAI Responses API with tested options</td></tr>
-        <tr><td>&#9745;</td><td>Automated unit tests</td><td>20 passing</td></tr>
+        <tr><td>&#9745;</td><td>Provider integration implemented</td><td>NVIDIA NIM chat completion with tested options</td></tr>
+        <tr><td>&#9745;</td><td>Automated unit tests</td><td>29 passing</td></tr>
         <tr><td>&#9745;</td><td>Container build</td><td>GitHub runner build passed</td></tr>
         <tr><td>&#9745;</td><td>Protected source branch</td><td>Required Validate check and pull requests</td></tr>
         <tr><td>&#9744;</td><td>Live trial host</td><td>Select provider and provision service</td></tr>
@@ -771,12 +770,12 @@ http://127.0.0.1:8000/docs</pre>
       <li>Repository: <a href="https://github.com/Adipat2003/metaglasses-backend">github.com/Adipat2003/metaglasses-backend</a></li>
       <li>Successful CI/CD run: <a href="https://github.com/Adipat2003/metaglasses-backend/actions/runs/33904935020">GitHub Actions run 33904935020</a></li>
       <li>Supabase JWT guide: <a href="https://supabase.com/docs/guides/auth/jwts">supabase.com/docs/guides/auth/jwts</a></li>
-      <li>OpenAI Docs, GPT-5.6 Sol: <a href="https://developers.openai.com/api/docs/models/gpt-5.6-sol">developers.openai.com/api/docs/models/gpt-5.6-sol</a></li>
+      <li>NVIDIA NIM, Kimi-K3: <a href="https://build.nvidia.com/moonshotai/kimi-k3">build.nvidia.com/moonshotai/kimi-k3</a></li>
       <li>GitHub Pages scope: <a href="https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages">docs.github.com Pages overview</a></li>
       <li>GitHub Container Registry: <a href="https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry">docs.github.com Container registry</a></li>
     </ul>
 
-    <p class="footer-note">This report describes the verified state on September 4, 2026. Hosted URLs, external secrets, provider account configuration, mobile-client implementation, and later repository changes are outside this snapshot unless explicitly stated.</p>
+    <p class="footer-note">This report describes the verified state on September 6, 2026. External secrets, provider account configuration, mobile-client implementation, and later repository changes are outside this snapshot unless explicitly stated.</p>
   </section>
 </body>
 </html>
