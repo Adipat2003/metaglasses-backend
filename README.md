@@ -112,6 +112,34 @@ the published image to a container host and configure `APP_ENV`, `AUTH_MODE`,
 Supabase session pooler on IPv4-only persistent hosts and require SSL. Percent-encode
 special characters in the database password before constructing the URL.
 
+## Render deployment environments
+
+The repository's default branch is `main`. The Render Blueprint defines two Docker
+services that track it:
+
+| Service | Environment | Deployment policy |
+| --- | --- | --- |
+| `metaglasses-backend` | Trial | Deploy after the GitHub checks pass |
+| `metaglasses-backend-prod` | Production | Automatic deploys disabled |
+
+Sync `render.yaml` in the Render dashboard to create or update both services. Configure
+the four secret values separately on each service: `SUPABASE_URL`, `CORS_ORIGINS`,
+`DATABASE_URL`, and `OPENAI_API_KEY`. Trial and production must use their corresponding
+Supabase projects and must not share database credentials.
+
+Production can be released in either of two explicit ways:
+
+1. In Render, select `metaglasses-backend-prod`, choose **Manual Deploy**, and deploy
+   the latest `main` commit.
+2. In GitHub Actions, run the `CI/CD` workflow from `main` with
+   `deploy_production=true`. Add the production service's Render deploy-hook URL as the
+   `RENDER_PROD_DEPLOY_HOOK_URL` secret in a GitHub environment named `production`.
+   Configure required reviewers on that environment if the repository plan supports
+   them.
+
+The deploy-hook URL is a secret. Never add it to `render.yaml`, a workflow file, or an
+untracked local environment file that might later be committed.
+
 ## Pairing lifecycle
 
 The phone generates a 32-character hexadecimal token and sends it in its first

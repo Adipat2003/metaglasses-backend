@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      deploy_production:
+        description: Deploy the selected revision to the production Render service
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -82,3 +88,26 @@ jobs:
             ghcr.io/adipat2003/metaglasses-backend:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy-production:
+    name: Deploy production
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.deploy_production &&
+      github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: production
+      url: https://metaglasses-backend-prod.onrender.com
+
+    steps:
+      - name: Trigger Render production deploy
+        env:
+          GIT_COMMIT_SHA: ${{ github.sha }}
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_PROD_DEPLOY_HOOK_URL }}
+        run: |
+          test -n "$RENDER_DEPLOY_HOOK_URL"
+          curl --fail-with-body --request POST \
+            "${RENDER_DEPLOY_HOOK_URL}&ref=${GIT_COMMIT_SHA}"
