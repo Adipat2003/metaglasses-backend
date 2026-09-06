@@ -6,7 +6,7 @@ services:
     branch: main
     dockerfilePath: ./Dockerfile
     healthCheckPath: /healthz
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: "off"
     envVars:
       - key: APP_ENV
         value: trial

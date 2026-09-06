@@ -120,13 +120,23 @@ services that track it:
 
 | Service | Environment | Deployment policy |
 | --- | --- | --- |
-| `metaglasses-backend` | Trial | Deploy after the GitHub checks pass |
-| `metaglasses-backend-prod` | Production | Automatic deploys disabled |
+| `metaglasses-backend` | Trial | GitHub Actions deploys each validated `main` push |
+| `metaglasses-backend-prod` | Production | GitHub Actions deploys only on manual dispatch |
 
 Sync `render.yaml` in the Render dashboard to create or update both services. Configure
 the four secret values separately on each service: `SUPABASE_URL`, `CORS_ORIGINS`,
 `DATABASE_URL`, and `NVIDIA_API_KEY`. Trial and production must use their corresponding
 Supabase projects and must not share database credentials.
+
+In each Render service, create a deploy hook under **Settings > Deploy Hook**. Store
+the Trial hook as `RENDER_TRIAL_DEPLOY_HOOK_URL` in a GitHub environment named
+`trial`. Store the Production hook as `RENDER_PROD_DEPLOY_HOOK_URL` in a GitHub
+environment named `production`. Render deploy hooks are secrets and must never be
+committed.
+
+After a merge to `main`, GitHub validates the application and triggers the Trial
+hook with that exact commit SHA. Render automatic deploys are disabled for both
+services so that Render cannot bypass the GitHub checks.
 
 Production can be released in either of two explicit ways:
 
@@ -134,7 +144,7 @@ Production can be released in either of two explicit ways:
    the latest `main` commit.
 2. In GitHub Actions, run the `CI/CD` workflow from `main` with
    `deploy_production=true`. Add the production service's Render deploy-hook URL as the
-   `RENDER_PROD_DEPLOY_HOOK_URL` secret in a GitHub environment named `production`.
+   `RENDER_PROD_DEPLOY_HOOK_URL` secret in the `production` environment.
    Configure required reviewers on that environment if the repository plan supports
    them.
 
