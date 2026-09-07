@@ -1,6 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-const bucket = Deno.env.get("PAIRING_IMAGE_BUCKET") ?? "Images";
 const maxImageBytes = 8 * 1024 * 1024;
 
 function serviceHeaders(serviceKey: string): Record<string, string> {
@@ -9,6 +8,39 @@ function serviceHeaders(serviceKey: string): Record<string, string> {
     Authorization: `Bearer ${serviceKey}`,
     "Content-Type": "application/json",
   };
+}
+
+async function secureBucket(
+  supabaseUrl: string,
+  headers: Record<string, string>,
+): Promise<string | null> {
+  const configuredBucket = Deno.env.get("PAIRING_IMAGE_BUCKET")?.trim();
+  const candidates = [...new Set([configuredBucket, "Images", "images"].filter(Boolean))] as string[];
+
+  for (const candidate of candidates) {
+    const response = await fetch(
+      `${supabaseUrl}/storage/v1/bucket/${encodeURIComponent(candidate)}`,
+      {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          public: false,
+          file_size_limit: maxImageBytes,
+          allowed_mime_types: ["image/jpeg", "image/png"],
+        }),
+      },
+    );
+    if (response.ok) {
+      return candidate;
+    }
+    const responseDetail = (await response.text()).slice(0, 200);
+    if (response.status === 404 || responseDetail.includes('"code":"NoSuchBucket"')) {
+      continue;
+    }
+    throw new Error(`Could not secure pairing image bucket: ${response.status}`);
+  }
+
+  return null;
 }
 
 Deno.serve(async (request: Request) => {
@@ -29,25 +61,21 @@ Deno.serve(async (request: Request) => {
   }
 
   const headers = serviceHeaders(serviceKey);
-  const bucketResponse = await fetch(
-    `${supabaseUrl}/storage/v1/bucket/${encodeURIComponent(bucket)}`,
-    {
-      method: "PUT",
-      headers,
-      body: JSON.stringify({
-        id: bucket,
-        name: bucket,
-        public: false,
-        file_size_limit: maxImageBytes,
-        allowed_mime_types: ["image/jpeg", "image/png"],
-      }),
-    },
-  );
-  if (!bucketResponse.ok) {
-    return new Response(
-      JSON.stringify({ error: "Could not secure the pairing image bucket" }),
-      { status: 502, headers: { "Content-Type": "application/json" } },
-    );
+  let bucket: string | null;
+  try {
+    bucket = await secureBucket(supabaseUrl, headers);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Unknown Storage error";
+    return new Response(JSON.stringify({ error: "Could not secure pairing image bucket", detail }), {
+      status: 502,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  if (!bucket) {
+    return new Response(JSON.stringify({ error: "Pairing image bucket does not exist" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
   const claimResponse = await fetch(
