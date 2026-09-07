@@ -247,9 +247,11 @@ captured by Mailpit at `http://127.0.0.1:54324` instead of being delivered exter
 
 ## Temporary pairing images
 
-Create a private file bucket named `Images` in each hosted project. Configure an 8 MiB
+Create a private file bucket for each hosted project. The existing trial bucket is named
+`Images`, while the production bucket is named `images`. Bucket names are case-sensitive,
+so set `PAIRING_IMAGE_BUCKET` to the exact name for that environment. Configure an 8 MiB
 per-object limit and allow only `image/jpeg` and `image/png`. The local configuration in
-`supabase/config.toml` declares the same bucket settings.
+`supabase/config.toml` declares the trial-style bucket settings.
 
 Apply the migrations before deploying the API. They create the `pairing_images` metadata
 table, authenticated Storage policies, cleanup functions, and the Cron networking

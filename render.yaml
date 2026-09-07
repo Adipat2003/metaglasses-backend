@@ -61,7 +61,7 @@ services:
       - key: PAIRING_TTL_SECONDS
         value: "3600"
       - key: PAIRING_IMAGE_BUCKET
-        value: Images
+        value: images
       - key: MAX_IMAGES_PER_PAIRING
         value: "10"
       - key: MAX_IMAGE_BYTES
