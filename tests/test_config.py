@@ -12,6 +12,12 @@ def test_local_environment_explicitly_allows_auth_bypass() -> None:
     assert settings.supabase_url is None
     assert settings.supabase_jwt_issuer is None
     assert settings.database_url is None
+    assert settings.supabase_publishable_key is None
+    assert settings.pairing_image_bucket == "Images"
+    assert settings.pairing_ttl_seconds == 3600
+    assert settings.max_images_per_pairing == 10
+    assert settings.max_image_bytes == 8 * 1024 * 1024
+    assert settings.image_signed_url_ttl_seconds == 60
 
 
 @pytest.mark.parametrize("app_env", ["trial", "prod"])
@@ -133,5 +139,26 @@ def test_hosted_database_url_requires_ssl() -> None:
                 "SUPABASE_URL": "https://trial.supabase.co",
                 "CORS_ORIGINS": "https://trial.glance.example",
                 "DATABASE_URL": "postgresql://backend:test-password@db.example.test/postgres",
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("MAX_IMAGES_PER_PAIRING", "0"),
+        ("PAIRING_TTL_SECONDS", "0"),
+        ("MAX_IMAGE_BYTES", "many"),
+        ("IMAGE_SIGNED_URL_TTL_SECONDS", "-1"),
+    ],
+)
+def test_image_limits_must_be_positive_integers(name: str, value: str) -> None:
+    with pytest.raises(ConfigurationError, match=name):
+        Settings.from_env(
+            {
+                "APP_ENV": "local",
+                "AUTH_MODE": "disabled",
+                "CORS_ORIGINS": "*",
+                name: value,
             }
         )

@@ -1,6 +1,7 @@
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from uuid import UUID
 
 import httpx
 from fastapi.testclient import TestClient
@@ -18,9 +19,15 @@ class FakeChatService:
     def __init__(self, result: str = "Pry the tire off the rim with your levers.") -> None:
         self.result = result
         self.messages: list[ConversationMessage] | None = None
+        self.image_urls: dict[UUID, str] = {}
 
-    async def generate(self, messages: Sequence[ConversationMessage]) -> str:
+    async def generate(
+        self,
+        messages: Sequence[ConversationMessage],
+        image_urls: Mapping[UUID, str] | None = None,
+    ) -> str:
         self.messages = list(messages)
+        self.image_urls = dict(image_urls or {})
         return self.result
 
 
@@ -28,8 +35,38 @@ class FailingChatService:
     def __init__(self, error: Exception) -> None:
         self.error = error
 
-    async def generate(self, messages: Sequence[ConversationMessage]) -> str:
+    async def generate(
+        self,
+        messages: Sequence[ConversationMessage],
+        image_urls: Mapping[UUID, str] | None = None,
+    ) -> str:
         raise self.error
+
+
+class FakeImageStorage:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    async def upload(
+        self,
+        object_path: str,
+        content: bytes,
+        content_type: str,
+        access_token: str | None,
+    ) -> None:
+        self.objects[object_path] = content
+
+    async def signed_url(
+        self,
+        object_path: str,
+        expires_in: int,
+        access_token: str | None,
+    ) -> str:
+        assert object_path in self.objects
+        return f"https://storage.example.test/{object_path}?expires={expires_in}"
+
+    async def delete(self, object_path: str, access_token: str | None) -> None:
+        self.objects.pop(object_path, None)
 
 
 class FakeTokenVerifier:
@@ -111,6 +148,10 @@ def test_openapi_marks_phone_routes_as_bearer_protected() -> None:
     document = client.get("/openapi.json").json()
 
     assert document["paths"]["/v1/chat"]["post"]["security"] == [{"SupabaseBearer": []}]
+    assert document["paths"]["/v1/images"]["post"]["security"] == [{"SupabaseBearer": []}]
+    assert document["paths"]["/v1/images/{image_id}"]["delete"]["security"] == [
+        {"SupabaseBearer": []}
+    ]
     assert document["paths"]["/v1/state"]["post"]["security"] == [{"SupabaseBearer": []}]
     assert "security" not in document["paths"]["/v1/display"]["get"]
 
@@ -121,11 +162,20 @@ def test_openapi_categorizes_and_describes_every_endpoint() -> None:
     document = client.get("/openapi.json").json()
 
     assert [tag["name"] for tag in document["tags"]] == ["System", "Phone", "Lens"]
-    assert set(document["paths"]) == {"/healthz", "/v1/chat", "/v1/display", "/v1/state"}
+    assert set(document["paths"]) == {
+        "/healthz",
+        "/v1/chat",
+        "/v1/display",
+        "/v1/images",
+        "/v1/images/{image_id}",
+        "/v1/state",
+    }
     expected_operations = {
         ("/healthz", "get"): ("System", "getHealth"),
         ("/v1/chat", "post"): ("Phone", "createChatResponse"),
         ("/v1/display", "get"): ("Lens", "getDisplay"),
+        ("/v1/images", "post"): ("Phone", "uploadPairingImage"),
+        ("/v1/images/{image_id}", "delete"): ("Phone", "deletePairingImage"),
         ("/v1/state", "post"): ("Phone", "updatePairingState"),
     }
     for (path, method), (tag, operation_id) in expected_operations.items():
@@ -198,6 +248,78 @@ def test_chat_returns_and_caches_the_same_text_for_the_lens() -> None:
     assert service.messages == expected_messages
 
 
+def test_pairing_image_is_uploaded_and_sent_to_nvidia() -> None:
+    service = FakeChatService()
+    storage = FakeImageStorage()
+    client = TestClient(create_app(service, image_storage=storage))
+    client.post("/v1/state", json={"pairingToken": TOKEN, "state": "listening"})
+
+    uploaded = client.post(
+        f"/v1/images?pairingToken={TOKEN}",
+        content=b"\x89PNG\r\n\x1a\nimage-data",
+        headers={"Content-Type": "image/png"},
+    )
+
+    assert uploaded.status_code == 201
+    image_id = uploaded.json()["imageId"]
+    chat = client.post(
+        "/v1/chat",
+        json={
+            "pairingToken": TOKEN,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "What is this?",
+                    "imageIds": [image_id],
+                }
+            ],
+        },
+    )
+
+    assert chat.status_code == 200
+    assert list(map(str, service.image_urls)) == [image_id]
+    assert next(iter(service.image_urls.values())).startswith("https://storage.example.test/")
+
+
+def test_image_upload_rejects_invalid_content_and_enforces_active_pairing() -> None:
+    storage = FakeImageStorage()
+    client = TestClient(create_app(FakeChatService(), image_storage=storage))
+
+    missing_pairing = client.post(
+        f"/v1/images?pairingToken={TOKEN}",
+        content=b"\x89PNG\r\n\x1a\nimage-data",
+        headers={"Content-Type": "image/png"},
+    )
+    client.post("/v1/state", json={"pairingToken": TOKEN, "state": "idle"})
+    invalid_image = client.post(
+        f"/v1/images?pairingToken={TOKEN}",
+        content=b"not-an-image",
+        headers={"Content-Type": "image/png"},
+    )
+
+    assert missing_pairing.status_code == 401
+    assert invalid_image.status_code == 415
+    assert not storage.objects
+
+
+def test_pairing_image_can_be_deleted_early() -> None:
+    storage = FakeImageStorage()
+    client = TestClient(create_app(FakeChatService(), image_storage=storage))
+    client.post("/v1/state", json={"pairingToken": TOKEN, "state": "idle"})
+    uploaded = client.post(
+        f"/v1/images?pairingToken={TOKEN}",
+        content=b"\xff\xd8\xffimage-data",
+        headers={"Content-Type": "image/jpeg"},
+    )
+
+    response = client.delete(
+        f"/v1/images/{uploaded.json()['imageId']}?pairingToken={TOKEN}"
+    )
+
+    assert response.status_code == 204
+    assert not storage.objects
+
+
 def test_large_transcript_is_rejected_with_413() -> None:
     client = TestClient(create_app(FakeChatService()))
     payload = {
@@ -255,3 +377,43 @@ def test_nvidia_service_uses_kimi_chat_completions(monkeypatch) -> None:
     assert payload["model"] == "moonshotai/kimi-k3"
     assert payload["messages"][-1] == {"role": "user", "content": "help"}
     assert payload["stream"] is False
+
+
+def test_nvidia_service_formats_image_urls_as_multimodal_content(monkeypatch) -> None:
+    captured_request: httpx.Request | None = None
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_request
+        captured_request = request
+        return httpx.Response(200, json={"choices": [{"message": {"content": "A bicycle."}}]})
+
+    image_id = UUID("018f47b0-4a86-7c35-9f28-9f15d94dc001")
+
+    async def invoke() -> str:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            service = NvidiaChatService(client)
+            return await service.generate(
+                [
+                    ConversationMessage(
+                        role="user", content="What is this?", imageIds=[image_id]
+                    )
+                ],
+                {image_id: "https://storage.example.test/image.png?token=short-lived"},
+            )
+
+    monkeypatch.setenv("NVIDIA_API_KEY", "test-key")
+    assert asyncio.run(invoke()) == "A bicycle."
+    assert captured_request is not None
+    payload = json.loads(captured_request.content)
+    assert payload["messages"][-1] == {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What is this?"},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://storage.example.test/image.png?token=short-lived"
+                },
+            },
+        ],
+    }

@@ -5,6 +5,8 @@ Supabase access tokens outside local unit tests. It exposes these endpoints:
 
 - `POST /v1/chat`: accepts a full text transcript, calls NVIDIA NIM, and stores only
   the newest response for the paired lens.
+- `POST /v1/images?pairingToken=...`: stores a temporary JPEG or PNG for a pairing.
+- `DELETE /v1/images/{imageId}?pairingToken=...`: removes a pairing image early.
 - `GET /v1/display?token=...`: returns the newest response and phone-driven state.
 - `POST /v1/state`: updates the lens state without blocking the phone voice loop.
 - `GET /healthz`: reports the running environment and authentication mode.
@@ -76,10 +78,44 @@ with Supabase and sends its access token:
 Authorization: Bearer <supabase-access-token>
 ```
 
-`POST /v1/chat` and `POST /v1/state` require that header. `GET /v1/display` uses the
+`POST /v1/chat`, `POST /v1/images`, `DELETE /v1/images/{imageId}`, and `POST /v1/state`
+require that header. `GET /v1/display` uses the
 pairing token as its capability credential and remains available to the separate lens
 web client. Pairing tokens are bound to the authenticated user that first registers
 them.
+
+## Temporary pairing images
+
+Register the pairing with `POST /v1/state`, then upload raw image bytes with a JPEG or
+PNG content type:
+
+```http
+POST /v1/images?pairingToken=<PAIRING_TOKEN>
+Authorization: Bearer <SUPABASE_ACCESS_TOKEN>
+Content-Type: image/jpeg
+
+<IMAGE_BYTES>
+```
+
+The response contains an `imageId`. Attach one or more returned IDs to a user message:
+
+```json
+{
+  "pairingToken": "<PAIRING_TOKEN>",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What am I looking at?",
+      "imageIds": ["<IMAGE_ID>"]
+    }
+  ]
+}
+```
+
+The API stores image objects in the private `Images` bucket and keeps only ownership,
+path, type, size, and expiry metadata in Postgres. It creates a short-lived signed URL
+only while making the NVIDIA request. The `cleanup-pairing-images` Edge Function removes
+expired objects through the Storage API and then removes their metadata.
 
 The current Glance mobile client still needs to replace its temporary backend
 `/v1/auth/login` and `/v1/auth/signup` calls with the Supabase client, keep the
@@ -108,9 +144,10 @@ ghcr.io/adipat2003/metaglasses-backend:COMMIT_SHA
 
 GitHub stores and builds the image but does not run persistent web services. Deploy
 the published image to a container host and configure `APP_ENV`, `AUTH_MODE`,
-`SUPABASE_URL`, `SUPABASE_JWT_AUDIENCE`, `CORS_ORIGINS`, `NVIDIA_API_KEY`, and
-`DATABASE_URL` there. `NVIDIA_MODEL`, `NVIDIA_BASE_URL`, and `PAIRING_TTL_SECONDS` are
-optional. Use the
+`SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_JWT_AUDIENCE`, `CORS_ORIGINS`,
+`NVIDIA_API_KEY`, and `DATABASE_URL` there. `NVIDIA_MODEL`, `NVIDIA_BASE_URL`,
+`PAIRING_TTL_SECONDS`, `PAIRING_IMAGE_BUCKET`, `MAX_IMAGES_PER_PAIRING`,
+`MAX_IMAGE_BYTES`, and `IMAGE_SIGNED_URL_TTL_SECONDS` are optional. Use the
 Supabase session pooler on IPv4-only persistent hosts and require SSL. Percent-encode
 special characters in the database password before constructing the URL.
 
@@ -125,9 +162,11 @@ services that track it:
 | `metaglasses-backend-prod` | Production | GitHub Actions deploys only on manual dispatch |
 
 Sync `render.yaml` in the Render dashboard to create or update both services. Configure
-the four secret values separately on each service: `SUPABASE_URL`, `CORS_ORIGINS`,
-`DATABASE_URL`, and `NVIDIA_API_KEY`. Trial and production must use their corresponding
-Supabase projects and must not share database credentials.
+the five environment-specific values separately on each service: `SUPABASE_URL`,
+`SUPABASE_PUBLISHABLE_KEY`, `CORS_ORIGINS`, `DATABASE_URL`, and `NVIDIA_API_KEY`.
+The publishable key is not a privileged secret, but it is environment-specific. Trial and
+production must use their corresponding Supabase projects and must not share database
+credentials.
 
 In each Render service, create a deploy hook under **Settings > Deploy Hook**. Store
 the Trial hook as `RENDER_TRIAL_DEPLOY_HOOK_URL` in a GitHub environment named

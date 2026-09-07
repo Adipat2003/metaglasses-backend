@@ -1,13 +1,23 @@
+import asyncio
 import json
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Annotated
+from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.auth import AuthenticatedUser, TokenVerifier, build_current_user_dependency
 from app.config import Settings
+from app.image_storage import (
+    ImageStorageError,
+    ImageStorageProtocol,
+    SupabaseImageStorage,
+    UnavailableImageStorage,
+)
 from app.models import (
     ChatRequest,
     ChatResponse,
@@ -15,10 +25,15 @@ from app.models import (
     DisplayResponse,
     ErrorResponse,
     HealthResponse,
+    ImageUploadResponse,
     StateRequest,
 )
 from app.service import ChatService, ModelProviderError, NvidiaChatService, RateLimitedError
 from app.store import (
+    PairingImage,
+    PairingImageLimitError,
+    PairingImageNotFoundError,
+    PairingNotFoundError,
     PairingOwnershipError,
     PairingStore,
     PairingStoreProtocol,
@@ -54,7 +69,7 @@ def error_response(description: str) -> dict[str, object]:
 
 
 def transcript_size(messages: Sequence[ConversationMessage]) -> int:
-    payload = [message.model_dump() for message in messages]
+    payload = [message.model_dump(mode="json") for message in messages]
     return len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
 
@@ -63,9 +78,11 @@ def create_app(
     settings: Settings | None = None,
     token_verifier: TokenVerifier | None = None,
     pairing_store: PairingStoreProtocol | None = None,
+    image_storage: ImageStorageProtocol | None = None,
 ) -> FastAPI:
     resolved_settings = settings or Settings.from_env()
     store = pairing_store or _build_pairing_store(resolved_settings)
+    images = image_storage or _build_image_storage(resolved_settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -102,7 +119,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=list(resolved_settings.cors_origins),
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["DELETE", "GET", "POST"],
         allow_headers=["Authorization", "Content-Type"],
     )
 
@@ -163,8 +180,48 @@ def create_app(
             await store.set_state(request.pairing_token, "thinking", user.id)
         except PairingOwnershipError as error:
             raise _pairing_forbidden() from error
+
+        image_ids = list(
+            dict.fromkeys(
+                image_id for message in request.messages for image_id in message.image_ids
+            )
+        )
+        if len(image_ids) > resolved_settings.max_images_per_pairing:
+            await store.set_state(request.pairing_token, "idle", user.id)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Too many images are attached to this chat request.",
+            )
         try:
-            text = await service.generate(request.messages)
+            stored_images = await store.get_images(request.pairing_token, user.id, image_ids)
+            signed_urls = await asyncio.gather(
+                *(
+                    images.signed_url(
+                        image.object_path,
+                        min(
+                            resolved_settings.image_signed_url_ttl_seconds,
+                            resolved_settings.pairing_ttl_seconds,
+                        ),
+                        user.access_token,
+                    )
+                    for image in stored_images
+                )
+            )
+            image_urls = {
+                image.id: signed_url
+                for image, signed_url in zip(stored_images, signed_urls, strict=True)
+            }
+        except PairingImageNotFoundError as error:
+            await store.set_state(request.pairing_token, "idle", user.id)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="One or more images do not belong to this active pairing.",
+            ) from error
+        except ImageStorageError as error:
+            await store.set_state(request.pairing_token, "idle", user.id)
+            raise _image_storage_unavailable() from error
+        try:
+            text = await service.generate(request.messages, image_urls)
         except RateLimitedError as error:
             await store.set_state(request.pairing_token, "idle", user.id)
             raise HTTPException(
@@ -184,6 +241,132 @@ def create_app(
             text=text,
             createdAt=display.created_at,
         )
+
+    @app.post(
+        "/v1/images",
+        tags=["Phone"],
+        summary="Upload a temporary pairing image",
+        description=(
+            "Stores a JPEG or PNG in the private pairing bucket. Send the image bytes as "
+            "the request body and identify the active pairing with the pairingToken query."
+        ),
+        status_code=status.HTTP_201_CREATED,
+        response_model=ImageUploadResponse,
+        operation_id="uploadPairingImage",
+        responses={
+            401: error_response("The bearer token or pairing token is invalid or expired."),
+            403: error_response("The pairing token belongs to another authenticated user."),
+            413: error_response("The image exceeds the configured byte limit."),
+            415: error_response("The request is not a supported JPEG or PNG image."),
+            429: error_response("The active pairing already contains the maximum images."),
+            503: error_response("Supabase Storage is unavailable or not configured."),
+        },
+    )
+    async def upload_image(
+        request: Request,
+        user: Annotated[AuthenticatedUser, Depends(current_user)],
+        pairing_token: str = Query(
+            alias="pairingToken",
+            min_length=32,
+            max_length=32,
+            pattern=r"^[0-9a-fA-F]{32}$",
+        ),
+    ) -> ImageUploadResponse:
+        try:
+            await store.assert_active(pairing_token, user.id)
+        except PairingNotFoundError as error:
+            raise _pairing_missing() from error
+        except PairingOwnershipError as error:
+            raise _pairing_forbidden() from error
+
+        content = await _read_image_body(request, resolved_settings.max_image_bytes)
+        content_type, extension = _validated_image_type(
+            request.headers.get("content-type", ""), content
+        )
+        image_id = uuid4()
+        pairing_digest = sha256(pairing_token.encode("utf-8")).hexdigest()
+        object_path = f"{user.id}/{pairing_digest}/{image_id}.{extension}"
+        image = PairingImage(
+            id=image_id,
+            object_path=object_path,
+            content_type=content_type,
+            byte_size=len(content),
+            created_at=datetime.now(UTC),
+        )
+
+        try:
+            await store.register_image(
+                pairing_token,
+                user.id,
+                image,
+                resolved_settings.max_images_per_pairing,
+            )
+        except (PairingNotFoundError, PairingOwnershipError, PairingImageLimitError) as error:
+            if isinstance(error, PairingNotFoundError):
+                raise _pairing_missing() from error
+            if isinstance(error, PairingOwnershipError):
+                raise _pairing_forbidden() from error
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="This pairing already contains the maximum number of images.",
+            ) from error
+
+        try:
+            await images.upload(object_path, content, content_type, user.access_token)
+        except ImageStorageError as error:
+            try:
+                await store.remove_image(pairing_token, user.id, image_id)
+            except (PairingNotFoundError, PairingOwnershipError, PairingImageNotFoundError):
+                pass
+            raise _image_storage_unavailable() from error
+
+        return ImageUploadResponse(
+            imageId=image.id,
+            contentType=image.content_type,
+            byteSize=image.byte_size,
+            createdAt=image.created_at,
+        )
+
+    @app.delete(
+        "/v1/images/{image_id}",
+        tags=["Phone"],
+        summary="Delete a temporary pairing image",
+        description="Deletes one image owned by the authenticated user and active pairing.",
+        status_code=status.HTTP_204_NO_CONTENT,
+        operation_id="deletePairingImage",
+        responses={
+            401: error_response("The bearer token or pairing token is invalid or expired."),
+            403: error_response("The pairing token belongs to another authenticated user."),
+            404: error_response("The image does not belong to this active pairing."),
+            503: error_response("Supabase Storage is unavailable or not configured."),
+        },
+    )
+    async def delete_image(
+        image_id: UUID,
+        user: Annotated[AuthenticatedUser, Depends(current_user)],
+        pairing_token: str = Query(
+            alias="pairingToken",
+            min_length=32,
+            max_length=32,
+            pattern=r"^[0-9a-fA-F]{32}$",
+        ),
+    ) -> Response:
+        try:
+            image = (await store.get_images(pairing_token, user.id, [image_id]))[0]
+            await images.delete(image.object_path, user.access_token)
+            await store.remove_image(pairing_token, user.id, image_id)
+        except PairingNotFoundError as error:
+            raise _pairing_missing() from error
+        except PairingOwnershipError as error:
+            raise _pairing_forbidden() from error
+        except PairingImageNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Image not found for this active pairing.",
+            ) from error
+        except ImageStorageError as error:
+            raise _image_storage_unavailable() from error
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get(
         "/v1/display",
@@ -249,8 +432,18 @@ def create_app(
 
 def _build_pairing_store(settings: Settings) -> PairingStoreProtocol:
     if settings.database_url:
-        return PostgresPairingStore(settings.database_url)
-    return PairingStore()
+        return PostgresPairingStore(settings.database_url, settings.pairing_ttl_seconds)
+    return PairingStore(settings.pairing_ttl_seconds)
+
+
+def _build_image_storage(settings: Settings) -> ImageStorageProtocol:
+    if settings.supabase_url and settings.supabase_publishable_key:
+        return SupabaseImageStorage(
+            settings.supabase_url,
+            settings.supabase_publishable_key,
+            settings.pairing_image_bucket,
+        )
+    return UnavailableImageStorage()
 
 
 def _pairing_forbidden() -> HTTPException:
@@ -258,6 +451,66 @@ def _pairing_forbidden() -> HTTPException:
         status_code=status.HTTP_403_FORBIDDEN,
         detail="This pairing token belongs to another user.",
     )
+
+
+def _pairing_missing() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Unknown or expired pairing token. Re-pair on the phone.",
+    )
+
+
+def _image_storage_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Image storage unavailable.",
+    )
+
+
+async def _read_image_body(request: Request, max_bytes: int) -> bytes:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    detail="Image too large.",
+                )
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid Content-Length header.",
+            ) from error
+
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail="Image too large.",
+            )
+    if not body:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Image body must not be empty.",
+        )
+    return bytes(body)
+
+
+def _validated_image_type(declared_type: str, content: bytes) -> tuple[str, str]:
+    normalized_type = declared_type.split(";", 1)[0].strip().lower()
+    signatures = {
+        "image/jpeg": (content.startswith(b"\xff\xd8\xff"), "jpg"),
+        "image/png": (content.startswith(b"\x89PNG\r\n\x1a\n"), "png"),
+    }
+    signature = signatures.get(normalized_type)
+    if signature is None or not signature[0]:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Only valid JPEG and PNG images are supported.",
+        )
+    return normalized_type, signature[1]
 
 
 app = create_app()

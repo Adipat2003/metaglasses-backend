@@ -1,6 +1,7 @@
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol
+from uuid import UUID
 
 import httpx
 
@@ -24,14 +25,22 @@ class ModelProviderError(Exception):
 
 
 class ChatService(Protocol):
-    async def generate(self, messages: Sequence[ConversationMessage]) -> str: ...
+    async def generate(
+        self,
+        messages: Sequence[ConversationMessage],
+        image_urls: Mapping[UUID, str] | None = None,
+    ) -> str: ...
 
 
 class NvidiaChatService:
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         self._client = client
 
-    async def generate(self, messages: Sequence[ConversationMessage]) -> str:
+    async def generate(
+        self,
+        messages: Sequence[ConversationMessage],
+        image_urls: Mapping[UUID, str] | None = None,
+    ) -> str:
         api_key = os.getenv("NVIDIA_API_KEY")
         if not api_key:
             raise ModelProviderError("NVIDIA_API_KEY is not configured")
@@ -41,7 +50,7 @@ class NvidiaChatService:
             "model": os.getenv("NVIDIA_MODEL", DEFAULT_NVIDIA_MODEL),
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                *[message.model_dump() for message in messages],
+                *[_model_message(message, image_urls or {}) for message in messages],
             ],
             "max_tokens": 160,
             "stream": False,
@@ -84,3 +93,18 @@ class NvidiaChatService:
         if not text:
             raise ModelProviderError("NVIDIA returned no text")
         return text
+
+
+def _model_message(
+    message: ConversationMessage, image_urls: Mapping[UUID, str]
+) -> dict[str, object]:
+    if not message.image_ids:
+        return {"role": message.role, "content": message.content}
+    content: list[dict[str, object]] = [{"type": "text", "text": message.content}]
+    for image_id in message.image_ids:
+        try:
+            image_url = image_urls[image_id]
+        except KeyError as error:
+            raise ModelProviderError("An image URL was not resolved") from error
+        content.append({"type": "image_url", "image_url": {"url": image_url}})
+    return {"role": message.role, "content": content}

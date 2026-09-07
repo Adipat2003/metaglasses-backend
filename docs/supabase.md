@@ -245,6 +245,27 @@ Local Supabase Studio is available at `http://127.0.0.1:54323` after `supabase s
 Its Authentication section shows local users. Local confirmation and reset emails are
 captured by Mailpit at `http://127.0.0.1:54324` instead of being delivered externally.
 
+## Temporary pairing images
+
+Create a private file bucket named `Images` in each hosted project. Configure an 8 MiB
+per-object limit and allow only `image/jpeg` and `image/png`. The local configuration in
+`supabase/config.toml` declares the same bucket settings.
+
+Apply the migrations before deploying the API. They create the `pairing_images` metadata
+table, authenticated Storage policies, cleanup functions, and the Cron networking
+extensions. The table is exposed only so the cleanup Edge Function can reach it through
+the Data API. Direct `anon` and `authenticated` access is explicitly denied.
+
+Deploy `supabase/functions/cleanup-pairing-images` with JWT verification enabled. Schedule
+it once per minute through Supabase Cron. Store the project URL and active publishable key
+in Vault for the scheduled invocation. The function uses the Edge runtime's built-in
+service credential, removes expired objects through the Storage API, and deletes metadata
+only after object deletion succeeds.
+
+Configure the Render service with the corresponding project's `SUPABASE_PUBLISHABLE_KEY`.
+The API forwards the phone user's access token to Storage, so the backend does not receive
+a Supabase secret or service-role key.
+
 ## Mobile changes required
 
 The mobile application should authenticate directly with the Supabase client. FastAPI
@@ -258,6 +279,8 @@ is a resource server and must never receive a user's password.
 4. Use separate project URLs and publishable keys in local, trial, and production builds.
 5. Handle deep links for email confirmation, password reset, and later social login.
 6. Include the user's lens pairing token in `/v1/chat` and `/v1/state` requests.
+7. Upload JPEG or PNG bytes to `/v1/images`, then attach returned `imageId` values to user
+   messages sent to `/v1/chat`.
 
 The API returns `401` for a missing, expired, or invalid access token and `403` when an
 authenticated user attempts to reuse a pairing token owned by someone else.

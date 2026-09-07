@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Annotated, Protocol
 
 import jwt
@@ -14,6 +14,7 @@ from app.config import Settings
 class AuthenticatedUser:
     id: str
     email: str | None = None
+    access_token: str | None = field(default=None, repr=False, compare=False)
 
 
 class AccessTokenError(Exception):
@@ -91,7 +92,10 @@ def build_current_user_dependency(
         try:
             if verifier is None:
                 raise AccessTokenError
-            return verifier.verify(credentials.credentials)
+            return replace(
+                verifier.verify(credentials.credentials),
+                access_token=credentials.credentials,
+            )
         except AccessTokenError as error:
             raise _unauthorized() from error
 
