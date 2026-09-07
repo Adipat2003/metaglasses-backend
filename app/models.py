@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 PairingState = Literal["idle", "listening", "thinking", "speaking"]
 
@@ -21,6 +22,11 @@ class ConversationMessage(BaseModel):
         description="Plain-text content for this conversation turn.",
         examples=["How do I change a bike tire?"],
     )
+    image_ids: list[UUID] = Field(
+        default_factory=list,
+        alias="imageIds",
+        description="Previously uploaded pairing images attached to this user turn.",
+    )
 
     @field_validator("content")
     @classmethod
@@ -28,6 +34,12 @@ class ConversationMessage(BaseModel):
         if not value.strip():
             raise ValueError("content must not be blank")
         return value
+
+    @model_validator(mode="after")
+    def images_belong_to_user_turns(self) -> "ConversationMessage":
+        if self.role != "user" and self.image_ids:
+            raise ValueError("imageIds can only be attached to user messages")
+        return self
 
 
 class ChatRequest(ApiModel):
@@ -80,6 +92,15 @@ class ChatResponse(ApiModel):
         alias="createdAt",
         description="UTC time when the response was created.",
     )
+
+
+class ImageUploadResponse(ApiModel):
+    """Metadata for an image stored for the active pairing."""
+
+    image_id: UUID = Field(alias="imageId", description="Opaque image reference for chat turns.")
+    content_type: str = Field(alias="contentType", description="Validated image media type.")
+    byte_size: int = Field(alias="byteSize", description="Stored image size in bytes.")
+    created_at: datetime = Field(alias="createdAt", description="UTC upload time.")
 
 
 class DisplayResponse(ApiModel):

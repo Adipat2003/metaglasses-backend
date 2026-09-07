@@ -21,6 +21,12 @@ class Settings:
     supabase_jwt_audience: str
     cors_origins: tuple[str, ...]
     database_url: str | None = None
+    supabase_publishable_key: str | None = None
+    pairing_image_bucket: str = "Images"
+    pairing_ttl_seconds: int = 3600
+    max_images_per_pairing: int = 10
+    max_image_bytes: int = 8 * 1024 * 1024
+    image_signed_url_ttl_seconds: int = 60
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Settings":
@@ -78,6 +84,17 @@ class Settings:
             }:
                 raise ConfigurationError("Hosted DATABASE_URL must require SSL")
 
+        pairing_image_bucket = values.get("PAIRING_IMAGE_BUCKET", "Images").strip()
+        if not pairing_image_bucket:
+            raise ConfigurationError("PAIRING_IMAGE_BUCKET must not be blank")
+
+        pairing_ttl_seconds = _positive_int(values, "PAIRING_TTL_SECONDS", 3600)
+        max_images_per_pairing = _positive_int(values, "MAX_IMAGES_PER_PAIRING", 10)
+        max_image_bytes = _positive_int(values, "MAX_IMAGE_BYTES", 8 * 1024 * 1024)
+        image_signed_url_ttl_seconds = _positive_int(
+            values, "IMAGE_SIGNED_URL_TTL_SECONDS", 60
+        )
+
         return cls(
             app_env=app_env,
             auth_mode=auth_mode,
@@ -86,4 +103,22 @@ class Settings:
             supabase_jwt_audience=values.get("SUPABASE_JWT_AUDIENCE", "authenticated"),
             cors_origins=origins,
             database_url=database_url,
+            supabase_publishable_key=(
+                values.get("SUPABASE_PUBLISHABLE_KEY", "").strip() or None
+            ),
+            pairing_image_bucket=pairing_image_bucket,
+            pairing_ttl_seconds=pairing_ttl_seconds,
+            max_images_per_pairing=max_images_per_pairing,
+            max_image_bytes=max_image_bytes,
+            image_signed_url_ttl_seconds=image_signed_url_ttl_seconds,
         )
+
+
+def _positive_int(values: Mapping[str, str], name: str, default: int) -> int:
+    try:
+        value = int(values.get(name, str(default)))
+    except ValueError as error:
+        raise ConfigurationError(f"{name} must be a positive integer") from error
+    if value <= 0:
+        raise ConfigurationError(f"{name} must be a positive integer")
+    return value

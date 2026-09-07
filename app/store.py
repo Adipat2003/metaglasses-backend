@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Protocol
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from psycopg_pool import AsyncConnectionPool
 
@@ -19,10 +19,32 @@ class PairingRecord:
     response_id: str | None = None
     text: str | None = None
     created_at: datetime | None = None
+    images: dict[UUID, "PairingImage"] | None = None
+
+
+@dataclass(frozen=True)
+class PairingImage:
+    id: UUID
+    object_path: str
+    content_type: str
+    byte_size: int
+    created_at: datetime
 
 
 class PairingOwnershipError(Exception):
     """A pairing token is already owned by another authenticated user."""
+
+
+class PairingNotFoundError(Exception):
+    """A pairing token is unknown or expired."""
+
+
+class PairingImageNotFoundError(Exception):
+    """An image does not belong to the active pairing."""
+
+
+class PairingImageLimitError(Exception):
+    """The active pairing already holds the maximum number of images."""
 
 
 class PairingStoreProtocol(Protocol):
@@ -33,6 +55,24 @@ class PairingStoreProtocol(Protocol):
     ) -> DisplayResponse: ...
 
     async def get_display(self, token: str) -> DisplayResponse | None: ...
+
+    async def assert_active(self, token: str, owner_id: str) -> None: ...
+
+    async def register_image(
+        self,
+        token: str,
+        owner_id: str,
+        image: PairingImage,
+        max_images: int,
+    ) -> None: ...
+
+    async def get_images(
+        self, token: str, owner_id: str, image_ids: list[UUID]
+    ) -> list[PairingImage]: ...
+
+    async def remove_image(
+        self, token: str, owner_id: str, image_id: UUID
+    ) -> PairingImage: ...
 
 
 class PairingStore:
@@ -68,6 +108,7 @@ class PairingStore:
                     owner_id=owner_id,
                     state=state,
                     last_phone_activity=now,
+                    images={},
                 )
                 return
             if record.owner_id != owner_id:
@@ -85,6 +126,7 @@ class PairingStore:
                     owner_id=owner_id,
                     state="speaking",
                     last_phone_activity=now,
+                    images={},
                 )
                 self._records[token] = record
             elif record.owner_id != owner_id:
@@ -105,6 +147,66 @@ class PairingStore:
             if record is None:
                 return None
             return self._display_response(record)
+
+    async def assert_active(self, token: str, owner_id: str) -> None:
+        async with self._lock:
+            self._purge_expired(self._now())
+            record = self._records.get(token)
+            if record is None:
+                raise PairingNotFoundError
+            if record.owner_id != owner_id:
+                raise PairingOwnershipError
+
+    async def register_image(
+        self,
+        token: str,
+        owner_id: str,
+        image: PairingImage,
+        max_images: int,
+    ) -> None:
+        async with self._lock:
+            self._purge_expired(self._now())
+            record = self._records.get(token)
+            if record is None:
+                raise PairingNotFoundError
+            if record.owner_id != owner_id:
+                raise PairingOwnershipError
+            if record.images is None:
+                record.images = {}
+            if len(record.images) >= max_images:
+                raise PairingImageLimitError
+            record.images[image.id] = image
+
+    async def get_images(
+        self, token: str, owner_id: str, image_ids: list[UUID]
+    ) -> list[PairingImage]:
+        async with self._lock:
+            self._purge_expired(self._now())
+            record = self._records.get(token)
+            if record is None:
+                raise PairingNotFoundError
+            if record.owner_id != owner_id:
+                raise PairingOwnershipError
+            images = record.images or {}
+            try:
+                return [images[image_id] for image_id in image_ids]
+            except KeyError as error:
+                raise PairingImageNotFoundError from error
+
+    async def remove_image(
+        self, token: str, owner_id: str, image_id: UUID
+    ) -> PairingImage:
+        async with self._lock:
+            self._purge_expired(self._now())
+            record = self._records.get(token)
+            if record is None:
+                raise PairingNotFoundError
+            if record.owner_id != owner_id:
+                raise PairingOwnershipError
+            try:
+                return (record.images or {}).pop(image_id)
+            except KeyError as error:
+                raise PairingImageNotFoundError from error
 
     @staticmethod
     def _display_response(record: PairingRecord) -> DisplayResponse:
@@ -142,6 +244,7 @@ class PostgresPairingStore:
 
     async def set_state(self, token: str, state: PairingState, owner_id: str) -> None:
         query = """
+            with upserted as (
             insert into app_private.pairings (
                 token_hash, owner_id, state, last_phone_activity, expires_at
             )
@@ -166,7 +269,17 @@ class PostgresPairingStore:
                 end
             where pairings.owner_id = excluded.owner_id
                or pairings.expires_at <= statement_timestamp()
-            returning token_hash
+            returning token_hash, owner_id, expires_at
+            ), refreshed_images as (
+                update public.pairing_images as image
+                set expires_at = upserted.expires_at
+                from upserted
+                where image.token_hash = upserted.token_hash
+                  and image.owner_id = upserted.owner_id
+                  and image.expires_at > statement_timestamp()
+                returning image.id
+            )
+            select token_hash from upserted
         """
         async with self._pool.connection() as connection:
             async with connection.cursor() as cursor:
@@ -180,6 +293,7 @@ class PostgresPairingStore:
     async def save_response(self, token: str, text: str, owner_id: str) -> DisplayResponse:
         response_id = f"r_{uuid4().hex}"
         query = """
+            with upserted as (
             insert into app_private.pairings (
                 token_hash, owner_id, state, last_phone_activity, expires_at,
                 response_id, response_text, response_created_at
@@ -197,7 +311,18 @@ class PostgresPairingStore:
                 response_created_at = excluded.response_created_at
             where pairings.owner_id = excluded.owner_id
                or pairings.expires_at <= statement_timestamp()
-            returning response_id, response_text, state, response_created_at
+            returning token_hash, owner_id, expires_at, response_id, response_text, state,
+                      response_created_at
+            ), refreshed_images as (
+                update public.pairing_images as image
+                set expires_at = upserted.expires_at
+                from upserted
+                where image.token_hash = upserted.token_hash
+                  and image.owner_id = upserted.owner_id
+                  and image.expires_at > statement_timestamp()
+                returning image.id
+            )
+            select response_id, response_text, state, response_created_at from upserted
         """
         async with self._pool.connection() as connection:
             async with connection.cursor() as cursor:
@@ -238,4 +363,138 @@ class PostgresPairingStore:
             text=row[1],
             state=row[2],
             createdAt=row[3],
+        )
+
+    async def assert_active(self, token: str, owner_id: str) -> None:
+        query = """
+            select owner_id, expires_at > statement_timestamp()
+            from app_private.pairings
+            where token_hash = %s
+        """
+        async with self._pool.connection() as connection:
+            async with connection.cursor() as cursor:
+                await cursor.execute(query, (self._token_hash(token),))
+                row = await cursor.fetchone()
+        if row is None or not row[1]:
+            raise PairingNotFoundError
+        if str(row[0]) != owner_id:
+            raise PairingOwnershipError
+
+    async def register_image(
+        self,
+        token: str,
+        owner_id: str,
+        image: PairingImage,
+        max_images: int,
+    ) -> None:
+        token_hash = self._token_hash(token)
+        async with self._pool.connection() as connection:
+            async with connection.transaction():
+                async with connection.cursor() as cursor:
+                    await cursor.execute(
+                        """
+                            select owner_id, expires_at
+                            from app_private.pairings
+                            where token_hash = %s
+                              and expires_at > statement_timestamp()
+                            for update
+                        """,
+                        (token_hash,),
+                    )
+                    pairing = await cursor.fetchone()
+                    if pairing is None:
+                        raise PairingNotFoundError
+                    if str(pairing[0]) != owner_id:
+                        raise PairingOwnershipError
+
+                    await cursor.execute(
+                        """
+                            select count(*)
+                            from public.pairing_images
+                            where token_hash = %s and status = 'active'
+                        """,
+                        (token_hash,),
+                    )
+                    count = await cursor.fetchone()
+                    if count is not None and count[0] >= max_images:
+                        raise PairingImageLimitError
+
+                    await cursor.execute(
+                        """
+                            insert into public.pairing_images (
+                                id, token_hash, owner_id, object_path, content_type,
+                                byte_size, created_at, expires_at
+                            )
+                            values (%s, %s, %s::uuid, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            image.id,
+                            token_hash,
+                            owner_id,
+                            image.object_path,
+                            image.content_type,
+                            image.byte_size,
+                            image.created_at,
+                            pairing[1],
+                        ),
+                    )
+
+    async def get_images(
+        self, token: str, owner_id: str, image_ids: list[UUID]
+    ) -> list[PairingImage]:
+        if not image_ids:
+            return []
+        await self.assert_active(token, owner_id)
+        query = """
+            select id, object_path, content_type, byte_size, created_at
+            from public.pairing_images
+            where token_hash = %s
+              and owner_id = %s::uuid
+              and status = 'active'
+              and expires_at > statement_timestamp()
+              and id = any(%s::uuid[])
+        """
+        async with self._pool.connection() as connection:
+            async with connection.cursor() as cursor:
+                await cursor.execute(query, (self._token_hash(token), owner_id, image_ids))
+                rows = await cursor.fetchall()
+        images = {
+            row[0]: PairingImage(
+                id=row[0],
+                object_path=row[1],
+                content_type=row[2],
+                byte_size=row[3],
+                created_at=row[4],
+            )
+            for row in rows
+        }
+        try:
+            return [images[image_id] for image_id in image_ids]
+        except KeyError as error:
+            raise PairingImageNotFoundError from error
+
+    async def remove_image(
+        self, token: str, owner_id: str, image_id: UUID
+    ) -> PairingImage:
+        await self.assert_active(token, owner_id)
+        query = """
+            delete from public.pairing_images
+            where id = %s
+              and token_hash = %s
+              and owner_id = %s::uuid
+              and status = 'active'
+            returning id, object_path, content_type, byte_size, created_at
+        """
+        async with self._pool.connection() as connection:
+            async with connection.cursor() as cursor:
+                await cursor.execute(query, (image_id, self._token_hash(token), owner_id))
+                row = await cursor.fetchone()
+        if row is None:
+            raise PairingImageNotFoundError
+        return PairingImage(
+            id=row[0],
+            object_path=row[1],
+            content_type=row[2],
+            byte_size=row[3],
+            created_at=row[4],
         )

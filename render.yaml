@@ -20,7 +20,17 @@ services:
         value: https://integrate.api.nvidia.com/v1
       - key: PAIRING_TTL_SECONDS
         value: "3600"
+      - key: PAIRING_IMAGE_BUCKET
+        value: Images
+      - key: MAX_IMAGES_PER_PAIRING
+        value: "10"
+      - key: MAX_IMAGE_BYTES
+        value: "8388608"
+      - key: IMAGE_SIGNED_URL_TTL_SECONDS
+        value: "60"
       - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
         sync: false
       - key: CORS_ORIGINS
         sync: false
@@ -50,7 +60,17 @@ services:
         value: https://integrate.api.nvidia.com/v1
       - key: PAIRING_TTL_SECONDS
         value: "3600"
+      - key: PAIRING_IMAGE_BUCKET
+        value: Images
+      - key: MAX_IMAGES_PER_PAIRING
+        value: "10"
+      - key: MAX_IMAGE_BYTES
+        value: "8388608"
+      - key: IMAGE_SIGNED_URL_TTL_SECONDS
+        value: "60"
       - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
         sync: false
       - key: CORS_ORIGINS
         sync: false
