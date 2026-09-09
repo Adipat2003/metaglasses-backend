@@ -29,7 +29,9 @@ services:
       - key: IMAGE_SIGNED_URL_TTL_SECONDS
         value: "60"
       - key: SUPABASE_URL
-        sync: false
+        value: https://uitdzmwfqtsohgffhuom.supabase.co
+      # Existing Blueprint services ignore sync:false values on later syncs.
+      # Enter the values below directly in the trial service's Environment page.
       - key: SUPABASE_PUBLISHABLE_KEY
         sync: false
       - key: CORS_ORIGINS
@@ -69,7 +71,9 @@ services:
       - key: IMAGE_SIGNED_URL_TTL_SECONDS
         value: "60"
       - key: SUPABASE_URL
-        sync: false
+        value: https://hxtdfghufjjmeltarffl.supabase.co
+      # Existing Blueprint services ignore sync:false values on later syncs.
+      # Enter the values below directly in the production service's Environment page.
       - key: SUPABASE_PUBLISHABLE_KEY
         sync: false
       - key: CORS_ORIGINS
