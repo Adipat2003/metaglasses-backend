@@ -1,288 +1,229 @@
-# Supabase authentication setup
+# Supabase setup and security
 
-## Environment layout
+Supabase provides Auth, Postgres, and private temporary image Storage. Trial and production
+use separate projects so users, tokens, database rows, redirects, quotas, and logs cannot
+cross environment boundaries.
 
-The Supabase Free plan permits two active hosted projects. Use them as follows:
+## Project map
 
-| App environment | Supabase environment | User data |
+| Setting | Trial | Production |
 | --- | --- | --- |
-| `local` | None or Supabase CLI running locally | Local API work and disposable auth users |
-| `trial` | Hosted project named `Glance Trial` | TestFlight and trial users only |
-| `prod` | Hosted project named `Glance Production` | Production users only |
+| Project reference | `uitdzmwfqtsohgffhuom` | `hxtdfghufjjmeltarffl` |
+| API URL | `https://uitdzmwfqtsohgffhuom.supabase.co` | `https://hxtdfghufjjmeltarffl.supabase.co` |
+| Database | `postgres` | `postgres` |
+| Storage bucket | `Images` | `images` |
+| Bucket visibility | Private | Private |
+| File limit | 8 MiB | 8 MiB |
+| MIME types | `image/jpeg`, `image/png` | `image/jpeg`, `image/png` |
+| Cleanup schedule | Every minute | Every minute |
 
-Never point two deployed environments at the same project. It mixes users, redirect
-URLs, rate limits, and audit activity across trust boundaries.
+Bucket names are case-sensitive. Render and mobile builds must use values from the same
+project as their environment.
 
-## Hosted project checklist
+## Credentials and trust boundaries
 
-Create `Glance Trial` and `Glance Production` in the Supabase dashboard. For each:
+The backend uses:
 
-1. Enable email/password under Authentication providers.
-2. Require email confirmation before production users can sign in.
-3. Configure the site URL and allowed redirect URLs for that environment.
-4. Use an asymmetric JWT signing key, preferably ES256. The FastAPI service verifies
-   tokens through the public JWKS endpoint and deliberately does not accept legacy
-   HS256 tokens.
-5. Record the project URL for the backend and the project URL plus publishable key for
-   the corresponding mobile build.
-6. Keep the secret key, service-role key, database password, and personal access token
-   out of the mobile app and repository.
+- The public project URL to fetch JWT signing keys.
+- A publishable key plus the current user's bearer token for user-authorized Storage calls.
+- A Postgres connection string for shared pairing state and image metadata.
 
-### Enable Google in each hosted project
+The backend does not need a Supabase secret key or service-role key. The Edge Function uses
+the service credential supplied by the Supabase runtime, but that value never leaves
+Supabase.
 
-Google configuration is separate for `Glance Trial` and `Glance Production`.
+The mobile app may contain its environment's project URL and publishable key. It must never
+contain the database URL, database password, Supabase secret key, service-role key, Vault
+values, or a Render deploy hook.
 
-1. In Google Cloud Console, create or select a project, configure the OAuth consent
-   screen, and create an OAuth 2.0 Client ID of type **Web application**.
-2. In the matching Supabase project, open **Authentication > Sign In / Providers >
-   Google**. Copy the callback URL shown by Supabase. It has the form
-   `https://PROJECT_REF.supabase.co/auth/v1/callback`.
-3. Add that exact callback under **Authorized redirect URIs** in the Google client.
-4. Paste the Google client ID and client secret into the Supabase Google provider and
-   enable it. Never place the client secret in the app or this repository.
-5. Under **Authentication > URL Configuration**, add the environment's exact app
-   callback: `glance-trial://auth/callback` or `glance://auth/callback`.
+## Auth configuration
 
-Use separate Google OAuth clients for trial and production so that callbacks and
-consent-screen configuration cannot be changed across environments accidentally.
+Configure each hosted project independently:
 
-### Enable Apple in each hosted project
+1. Enable email/password authentication.
+2. Require email confirmation for production.
+3. Set the exact site URL and redirect allowlist for the matching application environment.
+4. Use an asymmetric signing key such as ES256.
+5. Enable leaked-password protection for production.
+6. Keep access-token lifetimes appropriate for the application's risk.
 
-Apple configuration is also separate for trial and production.
-
-1. In Apple Developer, create an App ID with Sign in with Apple enabled. For a web
-   OAuth flow, also create a Services ID and a Sign in with Apple private key.
-2. Configure the Services ID website domain as `PROJECT_REF.supabase.co` and its return
-   URL as `https://PROJECT_REF.supabase.co/auth/v1/callback`.
-3. Generate an Apple client secret from the Team ID, Services ID, Key ID, and `.p8`
-   signing key. Do not put the `.p8` file or generated secret in this repository.
-4. In Supabase, open **Authentication > Sign In / Providers > Apple**. Enter the
-   Services ID as the first client ID, enter the generated secret, and enable Apple.
-5. Add the exact environment callback under **Authentication > URL Configuration**.
-6. Schedule secret rotation before Apple's generated client secret expires. Apple web
-   OAuth secrets must be rotated at least every six months.
-
-For a native iOS application, Apple's native sign-in flow is preferred. The app sends
-the Apple identity token and nonce to Supabase. Apple supplies the user's full name
-only on the first native sign-in, so the app must save it then if the product needs it.
-
-Suggested native callback schemes are `glance-trial://auth/callback` and
-`glance://auth/callback`. Register the matching URL scheme in each iOS target and add
-the exact callback to the corresponding Supabase project's redirect allowlist.
-
-## Backend configuration
-
-The backend validates access tokens locally against:
+The API validates the token signature, algorithm, issuer, audience, expiry, issued-at time,
+subject, and authenticated role against:
 
 ```text
 https://PROJECT_REF.supabase.co/auth/v1/.well-known/jwks.json
 ```
 
-It validates the signature, algorithm, issuer, audience, expiry, issued-at time,
-subject, and authenticated role. It does not need a Supabase secret to do this.
+Hosted tokens are required for `/v1/state`, `/v1/chat`, and `/v1/images`. The lens
+`/v1/display` endpoint uses the random pairing token as a capability credential.
 
-The hosted backend also uses PostgreSQL for short-lived pairing state. Apply the
-checked-in migrations to each hosted project, then set `DATABASE_URL` in the hosting
-platform's secret manager. The table is in the unexposed `app_private` schema and
-contains only a SHA-256 pairing-token hash, owner ID, lens state, expiry, and newest
-generated response. It does not contain conversation transcripts or audio.
+### Optional Google and Apple sign-in
 
-For a persistent Render service, use the Supabase session pooler connection string
-when the direct IPv6 endpoint is unavailable. Keep `sslmode=require` in the URL. The
-database password must be percent-encoded, and the full URL must never be committed.
+Create separate OAuth clients for trial and production. Register this Supabase callback in
+the provider:
 
-Copy the appropriate template and supply its real values through your deployment
-platform:
-
-```powershell
-Copy-Item .env.trial.example .env.trial
-Copy-Item .env.prod.example .env.prod
+```text
+https://PROJECT_REF.supabase.co/auth/v1/callback
 ```
 
-Do not commit either resulting file. For deployments, configure the same variables in
-the platform's secret and environment settings instead of uploading the files.
+Add only the matching app callback to each Supabase redirect allowlist, for example
+`glance-trial://auth/callback` for trial and `glance://auth/callback` for production.
+Keep provider secrets and Apple private keys outside the repository and mobile app.
 
-## Local unit tests without auth
+For native iOS Sign in with Apple, send the Apple identity token and nonce to Supabase. Apple
+provides the user's name only on the first sign-in, so save it then if needed.
 
-Pytest forces `APP_ENV=local` and `AUTH_MODE=disabled` inside the test process. Tests
-never contact Supabase and can inject a fake token verifier when exercising protected
-routes:
+## Database schema
 
-```powershell
-.venv\Scripts\python.exe -m pytest
+The repository uses imperative SQL migrations under `supabase/migrations`. Apply them in
+filename order to every Supabase project.
+
+The migrations create:
+
+- `app_private.pairings` for hashed pairing tokens, owner, state, expiry, and latest text.
+- `public.pairing_images` for temporary object metadata.
+- Supporting indexes and cleanup functions.
+- Storage RLS policies.
+- `pg_cron` and `pg_net` extensions.
+
+`app_private` is not exposed by the Data API. `public.pairing_images` has RLS enabled and
+forced, direct `anon` and `authenticated` metadata access is denied, and only the
+runtime service role can call the cleanup RPCs.
+
+The checked-in migration versions are the source of truth. Before and after a database
+change, compare both remote histories with:
+
+```bash
+npx --yes supabase@2.116.0 migration list
 ```
 
-The bypass cannot be selected with `APP_ENV=trial` or `prod`; application startup
-fails if that combination is attempted.
+Create new migrations with the Supabase CLI, review the SQL, apply the same file to trial
+first, verify it, then apply it to production. Never edit an already-applied migration.
 
-## Local Supabase integration testing
+## Postgres connection
 
-Install a Docker-compatible runtime. The checked-in configuration was generated with
-Supabase CLI 2.116.0. Generate a developer-only signing key, then start the stack with
-the same CLI version:
+For Render, copy the session pooler URL from **Connect**. The direct database host may
+require IPv6 and may not be reachable from the service.
 
-```powershell
-Copy-Item supabase/signing_keys.example.json supabase/signing_keys.json
-npx --yes supabase@2.116.0 gen signing-key --algorithm ES256 --append
-npx --yes supabase@2.116.0 start
-Copy-Item .env.local-auth.example .env.local-auth
-uv run uvicorn app.main:app --reload --env-file .env.local-auth
+The URL must:
+
+- Point to the matching project.
+- Use the `postgres` database.
+- Contain the percent-encoded database password.
+- End with `sslmode=require` or a stricter SSL mode.
+- Remain only in Render's environment settings.
+
+See [deployment.md](deployment.md) for the exact environment-specific URL formats.
+
+## Temporary image lifecycle
+
+One user can upload multiple images for one active pairing, up to
+`MAX_IMAGES_PER_PAIRING`. The backend registers metadata before allowing Storage upload.
+Storage policies require all of the following:
+
+- The request uses the `authenticated` role.
+- The first object-path folder equals `auth.uid()`.
+- The object path matches pre-registered metadata.
+- The same user owns the active, unexpired pairing.
+- The metadata row is active and unexpired.
+
+The backend passes a signed URL to NVIDIA only during the model request. Its lifetime is
+the lower of the configured signed-URL TTL and the remaining pairing lifetime.
+
+The `cleanup-pairing-images` Edge Function:
+
+1. Confirms the configured `Images` or `images` bucket exists.
+2. Reapplies private visibility, the 8 MiB limit, and the JPEG/PNG allowlist.
+3. Claims expired metadata rows in bounded batches.
+4. Deletes the corresponding objects through the Storage API.
+5. Deletes metadata only after object deletion succeeds.
+
+Deploy the function with JWT verification enabled:
+
+```bash
+npx --yes supabase@2.116.0 functions deploy cleanup-pairing-images --project-ref PROJECT_REF
 ```
 
-The generated `supabase/signing_keys.json` is ignored by Git. Each developer and CI
-environment must generate its own key rather than sharing private signing material.
+Do not set `SUPABASE_SERVICE_ROLE_KEY` manually. Supabase provides it to the function
+runtime.
 
-The CLI reports the local project URL and publishable key. The default API URL is
-`http://127.0.0.1:54321`, which already matches the local-auth template. Integration
-requests must obtain a local Supabase access token and send it as a bearer token.
-The template also connects the API to local Postgres on port `54322`, so pairing state
-persists across API restarts.
+## Cleanup schedule
 
-## Run the API in Docker against local Auth and Postgres
+Each project stores two values in Vault:
 
-The Supabase CLI already runs local Auth and Postgres in Docker. The checked-in Compose
-file runs the FastAPI service alongside that stack without duplicating Supabase's managed
-containers. Start Supabase first, then create the Docker-specific application environment
-and run the API:
+- `pairing_cleanup_project_url`
+- `pairing_cleanup_publishable_key`
 
-```powershell
-Copy-Item .env.docker.example .env.docker
-npx --yes supabase@2.116.0 start
-docker compose up --build
+Cron runs `cleanup-pairing-images-every-minute` with schedule `* * * * *`. The command
+reads both values from Vault and calls:
+
+```text
+https://PROJECT_REF.supabase.co/functions/v1/cleanup-pairing-images
 ```
 
-The API is available at `http://127.0.0.1:8000`, Supabase Auth remains at
-`http://127.0.0.1:54321`, Postgres remains at `127.0.0.1:54322`, and Studio is at
-`http://127.0.0.1:54323`. Compose uses `host.docker.internal` to reach the Supabase
-ports from the API container, including a Linux host-gateway mapping. Its separate
-`SUPABASE_JWT_ISSUER` retains the host-facing issuer for strict JWT validation.
+The publishable key is passed as the bearer credential so the function gateway can verify
+the scheduled request. Never place a populated key in a migration.
 
-Stop only the API with `docker compose down`. Stop the Supabase stack separately with
-`npx --yes supabase@2.116.0 stop` when it is no longer needed.
+Verify the scheduler:
 
-### Local Google and Apple provider credentials
+```sql
+select jobid, jobname, schedule, active
+from cron.job
+where jobname = 'cleanup-pairing-images-every-minute';
 
-The checked-in `supabase/config.toml` enables both providers and reads all credentials
-from process environment variables. Copy the safe template, populate the ignored
-file, load its values into the current PowerShell process, and then start Supabase:
-
-```powershell
-Copy-Item supabase/oauth.env.example supabase/oauth.env
-$oauthConfig = Get-Content supabase/oauth.env | ConvertFrom-StringData
-$oauthConfig.GetEnumerator() | ForEach-Object {
-    [Environment]::SetEnvironmentVariable($_.Key, $_.Value, "Process")
-}
-supabase start
+select status_code, error_msg, created
+from net._http_response
+order by id desc
+limit 5;
 ```
 
-For Google, register `http://127.0.0.1:54321/auth/v1/callback` as an authorized
-redirect URI in the Google web client. Apple does not accept a loopback HTTP return
-URL for web OAuth. Set `SUPABASE_AUTH_EXTERNAL_APPLE_REDIRECT_URI` to the public HTTPS
-tunnel URL that forwards to the local Supabase Auth callback. Testing Apple in the
-hosted trial project is usually simpler.
+Healthy scheduled calls return HTTP 200.
 
-The local provider credential file is ignored by Git. Do not paste its values into an
-issue, commit, chat, Postman export, or shell transcript.
+## Security verification
 
-## Simulate signup and retrieve a bearer token in Postman
+After any schema, policy, Auth, or Storage change:
 
-Keep Postman collections and environments outside the repository because populated
-environments contain credentials. Create an environment for the target Supabase
-project and define `supabase_url`, `supabase_publishable_key`, `backend_url`,
-`test_email`, `test_password`, `access_token`, `refresh_token`, and `pairing_token`.
+1. Confirm `pairing_images` has RLS enabled and forced.
+2. Confirm exactly three pairing-image policies exist on `storage.objects`.
+3. Confirm the bucket is private with the expected size and MIME restrictions.
+4. Confirm the Edge Function is active with JWT verification.
+5. Confirm the Cron job is active and the latest HTTP response is 200.
+6. Run Supabase security and performance advisors.
+7. Exercise an authenticated owner upload and verify a different user cannot read it.
 
-1. Select the environment in Postman's environment picker.
-2. Fill `supabase_publishable_key`, `test_email`, and `test_password`. For trial and
-   production, also configure the project and backend URLs.
-3. Send **Sign up with email and password**. Local Supabase normally returns a session
-   immediately. A hosted project with email confirmation enabled returns a user but
-   no session until the link is confirmed.
-4. Send **Sign in with password and save bearer token**. A Postman test script can save the
-   returned `access_token` and `refresh_token` as values in the selected environment.
-5. Send **Get current user** to validate the token, then send **Set paired lens state
-   with bearer token** to prove the backend accepts it.
+Unused-index notices are expected immediately after provisioning and should be evaluated
+again after representative traffic. Security warnings should be resolved before public
+production traffic.
 
-Each Supabase project is a separate issuer and user store. Repeat signup and sign-in
-against each environment. A local token cannot authenticate against trial or production,
-and a trial token cannot authenticate against production.
+## Mobile integration
 
-The request headers serve different purposes:
+The mobile app authenticates directly with Supabase. FastAPI is a resource server and must
+never receive the user's password.
 
-```http
-apikey: <SUPABASE_PUBLISHABLE_KEY>
-Authorization: Bearer <USER_ACCESS_TOKEN>
-```
+1. Sign in with the Supabase client.
+2. Store refresh tokens in Keychain.
+3. Refresh sessions through the Supabase client.
+4. Send the current access token as `Authorization: Bearer <TOKEN>`.
+5. Use separate project URLs and publishable keys for trial and production builds.
+6. Handle confirmation, reset, and social-login callbacks with the matching deep link.
+7. Generate a random 32-character hexadecimal pairing token.
+8. Register the pairing, upload images, and attach returned image IDs to chat messages.
 
-The publishable key identifies the Supabase project and is safe for a public client.
-It is not a user bearer token. Never use a Supabase secret key or legacy service-role
-key in Postman for these tests. The access token is short-lived; sign in again when it
-expires. Treat the refresh token as a credential and never export or commit a populated
-Postman environment.
+A token from one Supabase project cannot authenticate against the other environment.
 
-Social login cannot be fully simulated as a password request because Google and Apple
-require interactive browser consent. Start the provider authorization request in a
-browser or Postman, but complete the flow in an app or browser that can return to the
-registered deep link. The resulting Supabase session contains the same kind of access
-token that the FastAPI backend accepts.
+## Local Supabase and Docker
 
-## Find values and activity in the Supabase dashboard
+Local development uses the checked-in `supabase/config.toml`, migrations, seed file, and
+private `Images` bucket. Full startup, port mapping, environment, OAuth, and troubleshooting
+instructions are in [local-development.md](local-development.md).
 
-For each hosted project:
+## References
 
-- **Connect** or **Project Settings > API Keys** shows the project URL and publishable
-  key used by the Postman environment and mobile app.
-- **Authentication > Sign In / Providers** shows whether Email, Google, and Apple are
-  enabled and contains the hosted provider credential forms.
-- **Authentication > URL Configuration** contains the site URL and allowed redirects.
-- **Authentication > Users** lists email/password and social users. Opening a user
-  shows identities and metadata.
-- **Authentication > Audit Logs** shows signup, sign-in, token refresh, password-reset,
-  and logout activity.
-- **Logs > Auth** provides lower-level Auth service logs when a callback or token
-  exchange fails.
-
-Local Supabase Studio is available at `http://127.0.0.1:54323` after `supabase start`.
-Its Authentication section shows local users. Local confirmation and reset emails are
-captured by Mailpit at `http://127.0.0.1:54324` instead of being delivered externally.
-
-## Temporary pairing images
-
-Create a private file bucket for each hosted project. The existing trial bucket is named
-`Images`, while the production bucket is named `images`. Bucket names are case-sensitive,
-so set `PAIRING_IMAGE_BUCKET` to the exact name for that environment. Configure an 8 MiB
-per-object limit and allow only `image/jpeg` and `image/png`. The local configuration in
-`supabase/config.toml` declares the trial-style bucket settings.
-
-Apply the migrations before deploying the API. They create the `pairing_images` metadata
-table, authenticated Storage policies, cleanup functions, and the Cron networking
-extensions. The table is exposed only so the cleanup Edge Function can reach it through
-the Data API. Direct `anon` and `authenticated` access is explicitly denied.
-
-Deploy `supabase/functions/cleanup-pairing-images` with JWT verification enabled. Schedule
-it once per minute through Supabase Cron. Store the project URL and active publishable key
-in Vault for the scheduled invocation. The function uses the Edge runtime's built-in
-service credential, removes expired objects through the Storage API, and deletes metadata
-only after object deletion succeeds.
-
-Configure the Render service with the corresponding project's `SUPABASE_PUBLISHABLE_KEY`.
-The API forwards the phone user's access token to Storage, so the backend does not receive
-a Supabase secret or service-role key.
-
-## Mobile changes required
-
-The mobile application should authenticate directly with the Supabase client. FastAPI
-is a resource server and must never receive a user's password.
-
-1. Replace calls to `/v1/auth/login` and `/v1/auth/signup` with Supabase sign-in and
-   sign-up calls.
-2. Store the refresh token in Keychain and refresh short-lived sessions through the
-   Supabase client.
-3. Set the API client's bearer token to the current Supabase access token.
-4. Use separate project URLs and publishable keys in local, trial, and production builds.
-5. Handle deep links for email confirmation, password reset, and later social login.
-6. Include the user's lens pairing token in `/v1/chat` and `/v1/state` requests.
-7. Upload JPEG or PNG bytes to `/v1/images`, then attach returned `imageId` values to user
-   messages sent to `/v1/chat`.
-
-The API returns `401` for a missing, expired, or invalid access token and `403` when an
-authenticated user attempts to reuse a pairing token owned by someone else.
+- [Supabase JWTs](https://supabase.com/docs/guides/auth/jwts)
+- [Securing the Data API](https://supabase.com/docs/guides/api/securing-your-api)
+- [Storage access control](https://supabase.com/docs/guides/storage/security/access-control)
+- [Storage bucket restrictions](https://supabase.com/docs/guides/storage/buckets/creating-buckets)
+- [Supabase Cron](https://supabase.com/docs/guides/cron)
+- [Supabase Vault](https://supabase.com/docs/guides/database/vault)
+- [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started)
+- [NVIDIA Kimi-K3 multimodal endpoint](https://docs.api.nvidia.com/nim/re/reference/moonshotai-kimi-k3-infer)

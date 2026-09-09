@@ -1,93 +1,112 @@
 # MetaGlasses backend
 
-FastAPI service for the v0.1 phone-to-lens text loop. Phone endpoints use
-Supabase access tokens outside local unit tests. It exposes these endpoints:
+FastAPI backend for the MetaGlasses phone-to-lens assistant. The phone owns the
+conversation, authenticates with Supabase, and sends text plus optional temporary images.
+The backend calls NVIDIA NIM and stores only the latest short response and pairing state
+for the lens.
 
-- `POST /v1/chat`: accepts a full text transcript, calls NVIDIA NIM, and stores only
-  the newest response for the paired lens.
-- `POST /v1/images?pairingToken=...`: stores a temporary JPEG or PNG for a pairing.
-- `DELETE /v1/images/{imageId}?pairingToken=...`: removes a pairing image early.
-- `GET /v1/display?token=...`: returns the newest response and phone-driven state.
-- `POST /v1/state`: updates the lens state without blocking the phone voice loop.
-- `GET /healthz`: reports the running environment and authentication mode.
+## Current architecture
 
-The service never accepts, stores, or returns audio. Conversation history remains
-on the phone. When `DATABASE_URL` is configured, pairing state is shared through a
-private PostgreSQL table and expires one hour after the last phone request. Without
-`DATABASE_URL`, the app uses the process-local store for local development.
+- FastAPI serves the phone and lens endpoints.
+- Supabase Auth issues phone access tokens. The API validates them through the project's
+  public JWKS endpoint.
+- Supabase Postgres stores shared pairing state and temporary image metadata.
+- Supabase Storage holds private JPEG and PNG objects while a pairing is active.
+- A Supabase Edge Function and Cron job purge expired image objects every minute.
+- NVIDIA NIM provides text and image understanding through the configured model endpoint.
+- Render runs isolated trial and production services.
+- GitHub Actions validates every change, deploys trial after a validated `main` push, and
+  deploys production only through an approved manual workflow.
+
+The backend does not store audio or conversation transcripts. It must not receive a
+Supabase secret key or service-role key.
+
+## API
+
+| Method and path | Caller | Purpose |
+| --- | --- | --- |
+| `GET /healthz` | Monitoring | Report process health, environment, and auth mode |
+| `POST /v1/state` | Authenticated phone | Register a pairing or update lens state |
+| `POST /v1/chat` | Authenticated phone | Generate and cache the next lens instruction |
+| `POST /v1/images?pairingToken=...` | Authenticated phone | Upload a temporary JPEG or PNG |
+| `DELETE /v1/images/{imageId}?pairingToken=...` | Authenticated phone | Delete a temporary image early |
+| `GET /v1/display?token=...` | Paired lens | Read the latest response and state |
+
+Interactive API documentation is available at `/docs` on every running service.
 
 ## Environments
 
-The Free Supabase tier supports two hosted projects. This repository uses them for
-`trial` and `prod`. Local development uses `APP_ENV=local`, either with an explicit
-authentication bypass or with the local Supabase CLI stack.
-
-| Environment | Supabase | Authentication | Purpose |
+| Environment | Supabase project | Storage bucket | Backend |
 | --- | --- | --- | --- |
-| `local` | None or local CLI at port 54321 | Disabled or required | Local API and auth integration work |
-| `trial` | Hosted project 1 | Required | TestFlight and external trials |
-| `prod` | Hosted project 2 | Required | Production users |
+| Local | Supabase CLI or none | `Images` | `http://127.0.0.1:8000` |
+| Trial | `uitdzmwfqtsohgffhuom` | `Images` | `https://metaglasses-backend.onrender.com` |
+| Production | `hxtdfghufjjmeltarffl` | `images` | `https://metaglasses-backend-prod.onrender.com` |
 
-Authentication can be disabled only in `local`. Trial and production also reject
-wildcard CORS configuration. The backend uses the public Supabase project URL to
-validate JWTs against its JWKS endpoint and `DATABASE_URL` for shared pairing state.
-Do not give it a service-role API key for authentication.
+Bucket names are case-sensitive. Authentication can be disabled only with
+`APP_ENV=local`. Trial and production require HTTPS, explicit CORS origins, and separate
+Supabase credentials.
 
-Copy the appropriate committed template to an ignored environment file:
+## Local development
 
-```powershell
-Copy-Item .env.local.example .env.local
-```
+Create a local environment file and install the locked dependencies:
 
-Replace placeholders in trial and production with the corresponding project URL and
-web client origin. Keep `NVIDIA_API_KEY` and all future secrets in the untracked file
-or the deployment platform's secret manager.
-
-See [Supabase setup](docs/supabase.md) for the dashboard, signing-key, mobile-client,
-provider, Postman testing, bearer-token, and deployment checklists. Postman exports
-are intentionally kept outside this public repository because populated environments
-can contain user access and refresh tokens.
-
-## Run locally without auth
-
-Local bypass is explicit in `.env.local`; no bearer token is needed:
-
-```powershell
-cd C:\Github\metaglasses-backend
+```bash
+cp .env.local.example .env.local
 uv sync --all-groups
 uv run uvicorn app.main:app --reload --env-file .env.local
 ```
 
-The API is available at `http://127.0.0.1:8000`; FastAPI's interactive API page is
-at `http://127.0.0.1:8000/docs`.
+The local template disables authentication and uses process-local pairing state. Add a
+valid `NVIDIA_API_KEY` to exercise real chat requests.
 
-The default model is `moonshotai/kimi-k3`. Set `NVIDIA_MODEL` to select another model
-available through NVIDIA NIM after testing its latency and response quality.
+For local Supabase Auth, Postgres, and Storage:
 
-Set `CORS_ORIGINS` to the web app's deployed origin or a comma-separated allowlist
-before deployment. The local default is `*` to permit the separate web client during
-initial integration.
-
-## Run against Supabase Auth
-
-Use `.env.local-auth` with `supabase start`, `.env.docker` with `docker compose up`, or
-the trial/production environment file in its deployment. The mobile app signs in directly
-with Supabase and sends its access token:
-
-```http
-Authorization: Bearer <supabase-access-token>
+```bash
+cp supabase/signing_keys.example.json supabase/signing_keys.json
+npx --yes supabase@2.116.0 gen signing-key --algorithm ES256 --append
+npx --yes supabase@2.116.0 start
+cp .env.local-auth.example .env.local-auth
+uv run uvicorn app.main:app --reload --env-file .env.local-auth
 ```
 
-`POST /v1/chat`, `POST /v1/images`, `DELETE /v1/images/{imageId}`, and `POST /v1/state`
-require that header. `GET /v1/display` uses the
-pairing token as its capability credential and remains available to the separate lens
-web client. Pairing tokens are bound to the authenticated user that first registers
-them.
+See [Local development and Docker](docs/local-development.md) for the complete Compose,
+port, OAuth, and troubleshooting runbook.
 
-## Temporary pairing images
+## Configuration
 
-Register the pairing with `POST /v1/state`, then upload raw image bytes with a JPEG or
-PNG content type:
+Use `.env.trial.example` and `.env.prod.example` as safe templates. Real values belong in
+Render or an ignored local environment file.
+
+Required hosted values:
+
+| Variable | Purpose |
+| --- | --- |
+| `APP_ENV` | Select `trial` or `prod` |
+| `AUTH_MODE` | Must be `required` when hosted |
+| `SUPABASE_URL` | Project API URL and JWT issuer base |
+| `SUPABASE_PUBLISHABLE_KEY` | Project publishable key used with user-authorized Storage calls |
+| `SUPABASE_JWT_AUDIENCE` | Expected token audience, normally `authenticated` |
+| `DATABASE_URL` | Supabase Postgres connection with `sslmode=require` |
+| `CORS_ORIGINS` | Comma-separated allowlist of deployed client origins |
+| `NVIDIA_API_KEY` | Server-side NVIDIA credential |
+| `NVIDIA_MODEL` | Model identifier, currently `moonshotai/kimi-k3` |
+| `NVIDIA_BASE_URL` | NVIDIA NIM base URL |
+| `PAIRING_TTL_SECONDS` | Pairing and image lifetime, currently 3600 seconds |
+| `PAIRING_IMAGE_BUCKET` | Exact case-sensitive Storage bucket name |
+| `MAX_IMAGES_PER_PAIRING` | Maximum active images per pairing |
+| `MAX_IMAGE_BYTES` | Maximum image size in bytes |
+| `IMAGE_SIGNED_URL_TTL_SECONDS` | Lifetime of model-facing signed image URLs |
+
+Use the Supabase session pooler for Render because the direct database endpoint may require
+IPv6. Percent-encode special characters in the database password. Never commit a populated
+connection string.
+
+The complete environment-by-environment values and deployment runbook are in
+[Deployment](docs/deployment.md).
+
+## Temporary images
+
+Register the pairing with `POST /v1/state`, then upload raw image bytes:
 
 ```http
 POST /v1/images?pairingToken=<PAIRING_TOKEN>
@@ -97,7 +116,7 @@ Content-Type: image/jpeg
 <IMAGE_BYTES>
 ```
 
-The response contains an `imageId`. Attach one or more returned IDs to a user message:
+Attach the returned `imageId` to a user chat message:
 
 ```json
 {
@@ -112,87 +131,33 @@ The response contains an `imageId`. Attach one or more returned IDs to a user me
 }
 ```
 
-The API stores image objects in the private `Images` bucket and keeps only ownership,
-path, type, size, and expiry metadata in Postgres. It creates a short-lived signed URL
-only while making the NVIDIA request. The `cleanup-pairing-images` Edge Function removes
-expired objects through the Storage API and then removes their metadata.
+The API creates a short-lived signed Storage URL only for the NVIDIA request. Storage
+objects and metadata expire with the pairing and are removed by the cleanup job.
 
-The current Glance mobile client still needs to replace its temporary backend
-`/v1/auth/login` and `/v1/auth/signup` calls with the Supabase client, keep the
-refresh token in the iOS Keychain, and include its pairing token in phone requests.
-Only the environment-specific publishable key belongs in the mobile build. Never put
-a Supabase secret or service-role key in the app.
+## CI and deployment
 
-## Check the project
+`CI` runs linting, tests, and a production container build for every pull request and every
+push to `main`. After a successful `main` run, `CD` publishes commit-tagged and `latest`
+images to GitHub Container Registry and triggers the trial Render deploy.
 
-```powershell
+Production is never deployed by a normal push. Run the `CD` workflow manually from `main`,
+then approve the `production` GitHub environment. Both Render services have automatic
+deploys disabled so GitHub remains the deployment gate.
+
+See [Deployment](docs/deployment.md) for Render variables, GitHub secrets, release checks,
+and rollback steps.
+
+## Validate the repository
+
+```bash
 uv run ruff check .
 uv run python -m pytest
+docker build --tag metaglasses-backend:test .
 ```
 
-## CI and CD
+## Documentation
 
-The `CI` workflow runs linting, tests, and a production container build for every pull
-request and every push to `main`. The separate `CD` workflow starts only after a
-successful `CI` push run on `main`. It publishes immutable commit and `latest` images
-to GitHub Container Registry and triggers the Trial Render deploy:
-
-```text
-ghcr.io/adipat2003/metaglasses-backend:latest
-ghcr.io/adipat2003/metaglasses-backend:COMMIT_SHA
-```
-
-GitHub stores and builds the image but does not run persistent web services. Deploy
-the published image to a container host and configure `APP_ENV`, `AUTH_MODE`,
-`SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_JWT_AUDIENCE`, `CORS_ORIGINS`,
-`NVIDIA_API_KEY`, and `DATABASE_URL` there. `NVIDIA_MODEL`, `NVIDIA_BASE_URL`,
-`PAIRING_TTL_SECONDS`, `PAIRING_IMAGE_BUCKET`, `MAX_IMAGES_PER_PAIRING`,
-`MAX_IMAGE_BYTES`, and `IMAGE_SIGNED_URL_TTL_SECONDS` are optional. Use the
-Supabase session pooler on IPv4-only persistent hosts and require SSL. Percent-encode
-special characters in the database password before constructing the URL.
-
-## Render deployment environments
-
-The repository's default branch is `main`. The Render Blueprint defines two Docker
-services that track it:
-
-| Service | Environment | Deployment policy |
-| --- | --- | --- |
-| `metaglasses-backend` | Trial | GitHub Actions deploys each validated `main` push |
-| `metaglasses-backend-prod` | Production | GitHub Actions deploys only on manual dispatch |
-
-Sync `render.yaml` in the Render dashboard to create or update both services. Configure
-the five environment-specific values separately on each service: `SUPABASE_URL`,
-`SUPABASE_PUBLISHABLE_KEY`, `CORS_ORIGINS`, `DATABASE_URL`, and `NVIDIA_API_KEY`.
-The publishable key is not a privileged secret, but it is environment-specific. Trial and
-production must use their corresponding Supabase projects and must not share database
-credentials.
-
-In each Render service, create a deploy hook under **Settings > Deploy Hook**. Store
-the Trial hook as `RENDER_TRIAL_DEPLOY_HOOK_URL` in a GitHub environment named
-`trial`. Store the Production hook as `RENDER_PROD_DEPLOY_HOOK_URL` in a GitHub
-environment named `production`. Render deploy hooks are secrets and must never be
-committed.
-
-After a merge to `main`, `CI` validates the application and `CD` triggers the Trial
-hook with that exact commit SHA. Render automatic deploys are disabled for both
-services so that Render cannot bypass GitHub validation.
-
-Production can be released in either of two explicit ways:
-
-1. In Render, select `metaglasses-backend-prod`, choose **Manual Deploy**, and deploy
-   the latest `main` commit.
-2. In GitHub Actions, run the `CD` workflow from `main`. The workflow first confirms
-   that `CI` passed for the selected commit, then waits for the `production`
-   environment approval before triggering Render. Configure required reviewers on that
-   environment if the repository plan supports them.
-
-The deploy-hook URL is a secret. Never add it to `render.yaml`, a workflow file, or an
-untracked local environment file that might later be committed.
-
-## Pairing lifecycle
-
-The phone generates a 32-character hexadecimal token and sends it in its first
-`POST /v1/state` or `POST /v1/chat`. That registers the ephemeral pairing record.
-Lens polling with an unknown or expired token receives `401` and should request
-re-pairing on the phone.
+- [Deployment and operations](docs/deployment.md)
+- [Supabase setup and security](docs/supabase.md)
+- [Local development and Docker](docs/local-development.md)
+- [Repository contribution guidance](AGENTS.md)

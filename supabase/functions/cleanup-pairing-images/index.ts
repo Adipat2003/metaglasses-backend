@@ -15,7 +15,9 @@ async function secureBucket(
   headers: Record<string, string>,
 ): Promise<string | null> {
   const configuredBucket = Deno.env.get("PAIRING_IMAGE_BUCKET")?.trim();
-  const candidates = [...new Set([configuredBucket, "Images", "images"].filter(Boolean))] as string[];
+  const candidates = [
+    ...new Set([configuredBucket, "Images", "images"].filter(Boolean)),
+  ] as string[];
 
   for (const candidate of candidates) {
     const response = await fetch(
@@ -66,10 +68,13 @@ Deno.serve(async (request: Request) => {
     bucket = await secureBucket(supabaseUrl, headers);
   } catch (error) {
     const detail = error instanceof Error ? error.message : "Unknown Storage error";
-    return new Response(JSON.stringify({ error: "Could not secure pairing image bucket", detail }), {
-      status: 502,
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ error: "Could not secure pairing image bucket", detail }),
+      {
+        status: 502,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
   }
   if (!bucket) {
     return new Response(JSON.stringify({ error: "Pairing image bucket does not exist" }), {

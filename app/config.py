@@ -6,6 +6,11 @@ from urllib.parse import parse_qs, urlparse
 
 AppEnvironment = Literal["local", "trial", "prod"]
 AuthMode = Literal["disabled", "required"]
+HOSTED_SUPABASE_URLS = {
+    "trial": "https://uitdzmwfqtsohgffhuom.supabase.co",
+    "prod": "https://hxtdfghufjjmeltarffl.supabase.co",
+}
+HOSTED_IMAGE_BUCKETS = {"trial": "Images", "prod": "images"}
 
 
 class ConfigurationError(RuntimeError):
@@ -70,6 +75,7 @@ class Settings:
             raise ConfigurationError("Hosted environments cannot use a wildcard CORS origin")
 
         database_url = values.get("DATABASE_URL", "").strip() or None
+        parsed_database_url = None
         if database_url:
             parsed_database_url = urlparse(database_url)
             if parsed_database_url.scheme not in {"postgres", "postgresql"}:
@@ -84,9 +90,55 @@ class Settings:
             }:
                 raise ConfigurationError("Hosted DATABASE_URL must require SSL")
 
+        supabase_publishable_key = (
+            values.get("SUPABASE_PUBLISHABLE_KEY", "").strip() or None
+        )
+
+        if app_env in {"trial", "prod"}:
+            missing_hosted_values = [
+                name
+                for name, configured in (
+                    ("DATABASE_URL", database_url),
+                    ("NVIDIA_API_KEY", values.get("NVIDIA_API_KEY", "").strip()),
+                    ("SUPABASE_PUBLISHABLE_KEY", supabase_publishable_key),
+                )
+                if not configured
+            ]
+            if missing_hosted_values:
+                raise ConfigurationError(
+                    "Hosted environments require: " + ", ".join(missing_hosted_values)
+                )
+            expected_supabase_url = HOSTED_SUPABASE_URLS[app_env]
+            if supabase_url != expected_supabase_url:
+                raise ConfigurationError(
+                    f"SUPABASE_URL must be {expected_supabase_url} when APP_ENV={app_env}"
+                )
+            if not supabase_publishable_key.startswith("sb_publishable_"):
+                raise ConfigurationError(
+                    "Hosted SUPABASE_PUBLISHABLE_KEY must use an active publishable key"
+                )
+            project_ref = expected_supabase_url.removeprefix("https://").removesuffix(
+                ".supabase.co"
+            )
+            database_identity = (
+                f"{parsed_database_url.username}@{parsed_database_url.hostname}"
+            )
+            if project_ref not in database_identity:
+                raise ConfigurationError(
+                    f"DATABASE_URL must point to the {app_env} Supabase project"
+                )
+
         pairing_image_bucket = values.get("PAIRING_IMAGE_BUCKET", "Images").strip()
         if not pairing_image_bucket:
             raise ConfigurationError("PAIRING_IMAGE_BUCKET must not be blank")
+        if (
+            app_env in {"trial", "prod"}
+            and pairing_image_bucket != HOSTED_IMAGE_BUCKETS[app_env]
+        ):
+            raise ConfigurationError(
+                f"PAIRING_IMAGE_BUCKET must be {HOSTED_IMAGE_BUCKETS[app_env]} "
+                f"when APP_ENV={app_env}"
+            )
 
         pairing_ttl_seconds = _positive_int(values, "PAIRING_TTL_SECONDS", 3600)
         max_images_per_pairing = _positive_int(values, "MAX_IMAGES_PER_PAIRING", 10)
@@ -103,9 +155,7 @@ class Settings:
             supabase_jwt_audience=values.get("SUPABASE_JWT_AUDIENCE", "authenticated"),
             cors_origins=origins,
             database_url=database_url,
-            supabase_publishable_key=(
-                values.get("SUPABASE_PUBLISHABLE_KEY", "").strip() or None
-            ),
+            supabase_publishable_key=supabase_publishable_key,
             pairing_image_bucket=pairing_image_bucket,
             pairing_ttl_seconds=pairing_ttl_seconds,
             max_images_per_pairing=max_images_per_pairing,

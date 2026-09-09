@@ -144,6 +144,123 @@ def test_hosted_database_url_requires_ssl() -> None:
 
 
 @pytest.mark.parametrize(
+    "missing_name",
+    ["DATABASE_URL", "NVIDIA_API_KEY", "SUPABASE_PUBLISHABLE_KEY"],
+)
+def test_hosted_environment_requires_operational_values(missing_name: str) -> None:
+    values = {
+        "APP_ENV": "trial",
+        "AUTH_MODE": "required",
+        "SUPABASE_URL": "https://uitdzmwfqtsohgffhuom.supabase.co",
+        "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_trial",
+        "CORS_ORIGINS": "https://trial.glance.example",
+        "DATABASE_URL": (
+            "postgresql://postgres.uitdzmwfqtsohgffhuom:test-password"
+            "@pooler.example.test/postgres?sslmode=require"
+        ),
+        "NVIDIA_API_KEY": "nvidia-key",
+    }
+    del values[missing_name]
+
+    with pytest.raises(ConfigurationError, match=missing_name):
+        Settings.from_env(values)
+
+
+def test_hosted_environment_accepts_complete_configuration() -> None:
+    settings = Settings.from_env(
+        {
+            "APP_ENV": "prod",
+            "AUTH_MODE": "required",
+            "SUPABASE_URL": "https://hxtdfghufjjmeltarffl.supabase.co",
+            "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_prod",
+            "CORS_ORIGINS": "https://glance.example",
+            "DATABASE_URL": (
+                "postgresql://postgres.hxtdfghufjjmeltarffl:test-password"
+                "@pooler.example.test/postgres"
+                "?sslmode=require"
+            ),
+            "NVIDIA_API_KEY": "nvidia-key",
+            "PAIRING_IMAGE_BUCKET": "images",
+        }
+    )
+
+    assert settings.app_env == "prod"
+
+
+def test_hosted_environment_rejects_cross_environment_supabase_url() -> None:
+    with pytest.raises(ConfigurationError, match="SUPABASE_URL must be"):
+        Settings.from_env(
+            {
+                "APP_ENV": "trial",
+                "AUTH_MODE": "required",
+                "SUPABASE_URL": "https://hxtdfghufjjmeltarffl.supabase.co",
+                "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_trial",
+                "CORS_ORIGINS": "https://trial.glance.example",
+                "DATABASE_URL": (
+                    "postgresql://postgres.uitdzmwfqtsohgffhuom:test-password"
+                    "@pooler.example.test/postgres?sslmode=require"
+                ),
+                "NVIDIA_API_KEY": "nvidia-key",
+            }
+        )
+
+
+def test_hosted_environment_rejects_legacy_supabase_key() -> None:
+    with pytest.raises(ConfigurationError, match="active publishable key"):
+        Settings.from_env(
+            {
+                "APP_ENV": "prod",
+                "AUTH_MODE": "required",
+                "SUPABASE_URL": "https://hxtdfghufjjmeltarffl.supabase.co",
+                "SUPABASE_PUBLISHABLE_KEY": "legacy-anon-key",
+                "CORS_ORIGINS": "https://glance.example",
+                "DATABASE_URL": (
+                    "postgresql://postgres.hxtdfghufjjmeltarffl:test-password"
+                    "@pooler.example.test/postgres?sslmode=require"
+                ),
+                "NVIDIA_API_KEY": "nvidia-key",
+            }
+        )
+
+
+def test_hosted_environment_rejects_cross_environment_database_url() -> None:
+    with pytest.raises(ConfigurationError, match="DATABASE_URL must point"):
+        Settings.from_env(
+            {
+                "APP_ENV": "prod",
+                "AUTH_MODE": "required",
+                "SUPABASE_URL": "https://hxtdfghufjjmeltarffl.supabase.co",
+                "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_prod",
+                "CORS_ORIGINS": "https://glance.example",
+                "DATABASE_URL": (
+                    "postgresql://postgres.uitdzmwfqtsohgffhuom:test-password"
+                    "@pooler.example.test/postgres?sslmode=require"
+                ),
+                "NVIDIA_API_KEY": "nvidia-key",
+            }
+        )
+
+
+def test_hosted_environment_rejects_wrong_bucket_case() -> None:
+    with pytest.raises(ConfigurationError, match="PAIRING_IMAGE_BUCKET must be images"):
+        Settings.from_env(
+            {
+                "APP_ENV": "prod",
+                "AUTH_MODE": "required",
+                "SUPABASE_URL": "https://hxtdfghufjjmeltarffl.supabase.co",
+                "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_prod",
+                "CORS_ORIGINS": "https://glance.example",
+                "DATABASE_URL": (
+                    "postgresql://postgres.hxtdfghufjjmeltarffl:test-password"
+                    "@pooler.example.test/postgres?sslmode=require"
+                ),
+                "NVIDIA_API_KEY": "nvidia-key",
+                "PAIRING_IMAGE_BUCKET": "Images",
+            }
+        )
+
+
+@pytest.mark.parametrize(
     ("name", "value"),
     [
         ("MAX_IMAGES_PER_PAIRING", "0"),
