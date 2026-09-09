@@ -1,185 +1,165 @@
 # Deployment and operations
 
-This document is the source of truth for Render and GitHub Actions deployment. Supabase
-database, Auth, and Storage setup is documented separately in [supabase.md](supabase.md).
+The hosted API is deployed to Supabase Edge Functions. Trial deployment follows every
+successful `main` CI run. Production deployment is a manual GitHub Actions operation guarded
+by the `production` GitHub environment.
 
-## Hosted topology
+Render is a temporary rollback target during client cutover. The current CD workflow does
+not update Render.
 
-| Setting | Trial | Production |
-| --- | --- | --- |
-| Render service | `metaglasses-backend` | `metaglasses-backend-prod` |
-| Public URL | `https://metaglasses-backend.onrender.com` | `https://metaglasses-backend-prod.onrender.com` |
-| Git branch | `main` | `main` |
-| Render automatic deploy | Off | Off |
-| GitHub environment | `trial` | `production` |
-| Release trigger | Validated push to `main` | Manual `CD` workflow plus approval |
-| Supabase project | `uitdzmwfqtsohgffhuom` | `hxtdfghufjjmeltarffl` |
-| Storage bucket | `Images` | `images` |
+## Environment map
 
-Both services build the checked-in `Dockerfile`, listen on Render's injected `PORT`, and
-use `/healthz` as the health check. Do not create a `PORT` environment variable.
-
-## Render environment variables
-
-`render.yaml` declares every variable required by both services. Values marked
-`sync: false` must be entered independently in each Render service.
-
-| Variable | Trial | Production | Source |
+| Environment | Project reference | API base URL | Image bucket |
 | --- | --- | --- | --- |
-| `APP_ENV` | `trial` | `prod` | Blueprint |
-| `AUTH_MODE` | `required` | `required` | Blueprint |
-| `SUPABASE_URL` | `https://uitdzmwfqtsohgffhuom.supabase.co` | `https://hxtdfghufjjmeltarffl.supabase.co` | Blueprint |
-| `SUPABASE_PUBLISHABLE_KEY` | Trial publishable key | Production publishable key | Render value |
-| `SUPABASE_JWT_AUDIENCE` | `authenticated` | `authenticated` | Blueprint |
-| `CORS_ORIGINS` | Exact trial client origins | Exact production client origins | Render value |
-| `DATABASE_URL` | Trial session pooler URL | Production session pooler URL | Render secret |
-| `NVIDIA_API_KEY` | Trial/server NVIDIA key | Production/server NVIDIA key | Render secret |
-| `NVIDIA_MODEL` | `moonshotai/kimi-k3` | `moonshotai/kimi-k3` | Blueprint |
-| `NVIDIA_BASE_URL` | `https://integrate.api.nvidia.com/v1` | Same | Blueprint |
-| `PAIRING_TTL_SECONDS` | `3600` | `3600` | Blueprint |
-| `PAIRING_IMAGE_BUCKET` | `Images` | `images` | Blueprint |
-| `MAX_IMAGES_PER_PAIRING` | `10` | `10` | Blueprint |
-| `MAX_IMAGE_BYTES` | `8388608` | `8388608` | Blueprint |
-| `IMAGE_SIGNED_URL_TTL_SECONDS` | `60` | `60` | Blueprint |
+| Trial | `uitdzmwfqtsohgffhuom` | `https://uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api` | `Images` |
+| Production | `hxtdfghufjjmeltarffl` | `https://hxtdfghufjjmeltarffl.supabase.co/functions/v1/api` | `images` |
 
-Do not add `SUPABASE_SERVICE_ROLE_KEY`, a Supabase secret key, a database password by
-itself, or a user access token to Render.
+Bucket names are case-sensitive. The function selects the hosted bucket from its Supabase
+project URL. Local development can override the bucket with `PAIRING_IMAGE_BUCKET`.
 
-### Database URL
+## Supabase function secrets
 
-Use the Supabase session pooler connection shown by **Connect** in each project. Render may
-not reach the direct database host because the direct endpoint can require IPv6.
+Add this secret under **Edge Functions > Secrets** in both projects:
 
-Trial format:
-
-```text
-postgresql://postgres.uitdzmwfqtsohgffhuom:<PERCENT_ENCODED_PASSWORD>@<TRIAL_SESSION_POOLER_HOST>:5432/postgres?sslmode=require
-```
-
-Production format:
-
-```text
-postgresql://postgres.hxtdfghufjjmeltarffl:<PERCENT_ENCODED_PASSWORD>@<PROD_SESSION_POOLER_HOST>:5432/postgres?sslmode=require
-```
-
-Percent-encode reserved characters in the password. For example, encode `@` as `%40`.
-Never paste the populated URL into source control, an issue, or a build log.
-
-### CORS
-
-`CORS_ORIGINS` is a comma-separated list of exact web origins:
-
-```text
-https://trial.example.com,https://admin-trial.example.com
-```
-
-Do not include paths and do not use `*` in trial or production. Native iOS requests are
-not governed by browser CORS, but any browser-based admin or test client must be listed.
-
-## Render setup
-
-1. Open the Render Blueprint backed by this repository and sync `render.yaml`.
-2. Confirm both services use branch `main`, runtime Docker, and health path `/healthz`.
-3. Confirm automatic deploys are disabled for both services.
-4. Enter the four `sync: false` values separately for each service:
-   `SUPABASE_PUBLISHABLE_KEY`, `CORS_ORIGINS`, `DATABASE_URL`, and
-   `NVIDIA_API_KEY`.
-5. Create a deploy hook for each service under **Settings > Deploy Hook**.
-6. Store each hook only in its matching GitHub environment.
-
-Changing a Render environment value creates a new deploy. Check the health endpoint after
-the deploy completes. Hosted startup fails if `DATABASE_URL`, `NVIDIA_API_KEY`, or
-`SUPABASE_PUBLISHABLE_KEY` is missing, which prevents a partially configured release from
-appearing healthy. Startup also rejects a legacy Supabase key, the wrong project URL, or a
-database URL belonging to the other environment. It also checks the exact case-sensitive
-Storage bucket name.
-
-## GitHub configuration
-
-The repository uses two GitHub environments:
-
-| Environment | Required secret | Protection |
+| Secret | Trial | Production |
 | --- | --- | --- |
-| `trial` | `RENDER_TRIAL_DEPLOY_HOOK_URL` | Protected branches |
-| `production` | `RENDER_PROD_DEPLOY_HOOK_URL` | Protected branches and required approval |
+| `NVIDIA_API_KEY` | Trial or shared server credential | Production or shared server credential |
 
-Deploy-hook URLs are secrets. They must not appear in `render.yaml`, workflow files,
-environment examples, or documentation.
+`NVIDIA_MODEL` and `NVIDIA_BASE_URL` are optional overrides. Defaults are
+`moonshotai/kimi-k3` and `https://integrate.api.nvidia.com/v1`.
 
-## CI and CD behavior
+Supabase automatically injects the project URL, database URL, publishable keys, and secret
+keys into its function environment. Do not add database URLs, database passwords, user
+tokens, publishable keys, or secret keys as custom function secrets.
 
-The workflows are intentionally separated:
+## GitHub environment secrets
 
-1. `CI` runs for pull requests and pushes to `main`.
-2. CI installs locked dependencies, runs Ruff and Pytest, and builds the production image.
-3. After a successful `main` push, `CD` publishes:
-   - `ghcr.io/adipat2003/metaglasses-backend:latest`
-   - `ghcr.io/adipat2003/metaglasses-backend:<COMMIT_SHA>`
-4. The same automatic CD run triggers only the trial deploy hook.
-5. The production job is skipped on every normal push.
+Create these secrets independently in the `trial` and `production` GitHub environments:
 
-The deploy hook receives the validated commit SHA as its `ref`, preventing an unvalidated
-newer commit from being deployed accidentally.
+| Secret | Purpose |
+| --- | --- |
+| `SUPABASE_ACCESS_TOKEN` | Authorizes the CLI to deploy Edge Functions and manage the project |
+| `SUPABASE_DB_PASSWORD` | Authenticates `supabase db push` to the matching database |
 
-## Release production
+The personal access token can be shared between environments if it is authorized for both
+projects. The database passwords must match their respective projects. Never paste these
+values into source control, workflow logs, issues, or chat.
 
-1. Confirm the desired commit is on `main`.
-2. Confirm its `CI` push run passed.
-3. Open **GitHub Actions > CD > Run workflow**.
-4. Select `main` and run the workflow.
-5. Approve the `production` environment deployment.
-6. Wait for the production Render deploy to finish.
-7. Verify:
+The former `RENDER_TRIAL_DEPLOY_HOOK_URL` and `RENDER_PROD_DEPLOY_HOOK_URL` secrets may remain
+during the observation window, but the workflow no longer reads them. Delete them after
+Render is retired.
 
-```bash
-curl --fail https://metaglasses-backend-prod.onrender.com/healthz
+## CI behavior
+
+`.github/workflows/ci.yml` runs on pull requests and pushes to `main`:
+
+1. Install the locked Python environment.
+2. Run Ruff.
+3. Run Pytest contract and configuration tests.
+4. Check Deno formatting and TypeScript types for both Edge Functions.
+5. Build the legacy Docker image as a rollback validation.
+
+CI does not deploy anything.
+
+## Trial deployment
+
+After a successful `main` push CI run, `.github/workflows/cd.yml`:
+
+1. Checks out the exact revision validated by CI.
+2. Links the CLI to project `uitdzmwfqtsohgffhuom`.
+3. Applies unapplied database migrations.
+4. Deploys all Edge Functions.
+5. verifies the trial `/healthz` endpoint.
+
+The trial API base URL is:
+
+```text
+https://uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api
 ```
 
-The response must report `"environment":"prod"` and `"auth":"required"`.
+## Production deployment
 
-## Trial verification
+Production never runs from the automatic `workflow_run` path.
 
-After merging to `main`, wait for CI and CD, then verify:
+1. Open the repository’s **Actions** tab.
+2. Select **CD**.
+3. Select **Run workflow** from `main`.
+4. Approve the `production` environment when prompted.
+5. Wait for migration, function deployment, and health verification to complete.
+
+The workflow first confirms that the selected `main` revision passed CI. It then applies the
+same migrations and function sources to project `hxtdfghufjjmeltarffl`.
+
+## API health checks
+
+Trial:
 
 ```bash
-curl --fail https://metaglasses-backend.onrender.com/healthz
+curl --fail \
+  https://uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api/healthz
 ```
 
-The response must report `"environment":"trial"` and `"auth":"required"`.
+Production:
 
-Use `/docs` to confirm the deployed API includes the image upload and delete operations.
-An authenticated end-to-end smoke test should then register a pairing, upload one image,
-send its `imageId` to `/v1/chat`, and delete it.
+```bash
+curl --fail \
+  https://hxtdfghufjjmeltarffl.supabase.co/functions/v1/api/healthz
+```
+
+Expected hosted responses identify `trial` or `prod`, use `"status":"ok"`, and report
+`"auth":"required"`.
+
+## CORS policy
+
+The Edge API currently sends `Access-Control-Allow-Origin: *` and does not allow credentialed
+browser cookies. Supabase bearer authentication is still required for phone operations.
+This permits JavaScript from any origin to call the API when it possesses a valid user token.
+
+Replace the wildcard with an explicit allowlist before introducing a browser client that
+handles sensitive sessions.
+
+## Client cutover
+
+Keep the Render services available while moving clients:
+
+1. Deploy and validate the trial Edge API.
+2. Change the trial client base URL to the trial Supabase URL.
+3. Test Auth, pairing, chat, image upload, image-assisted chat, deletion, and expiry.
+4. Run and approve the manual production workflow.
+5. Change the production client base URL.
+6. Observe production before removing Render.
+
+The route suffixes remain `/v1/...`; only the base URL changes.
 
 ## Rollback
 
-Render retains previous deploys for each service. To roll back:
+During migration, restore the client’s previous Render base URL. Render keeps the last
+deployed FastAPI release because Supabase CD does not modify it.
 
-1. Open the affected service's **Deploys** page.
-2. Select the last known-good deploy.
-3. Choose **Rollback** or redeploy that commit.
-4. Verify `/healthz` and the affected authenticated flow.
-5. Fix forward through a pull request so `main` again represents the deployed state.
+For an Edge Function code regression, revert the offending commit and let trial deploy from
+`main`. For production, manually run and approve CD for the reverted `main` revision.
 
-Database migrations require a separate compatibility review before application rollback.
-Do not reverse a migration merely because the application was rolled back.
+Database migrations must be forward-compatible. Do not roll back a migration by deleting its
+history row or resetting a hosted database. Create a new corrective migration instead.
 
-## Operational checklist
+## Render retirement checklist
 
-- Both health endpoints return HTTP 200 with the correct environment.
-- The latest GitHub CI run for the deployed commit passed.
-- Trial deployed automatically and production required manual approval.
-- Render automatic deploys remain off.
-- Render has all four environment-specific values for each service.
-- Supabase migrations match the files under `supabase/migrations`.
-- Each Storage bucket is private and limited to JPEG/PNG files up to 8 MiB.
-- The cleanup Edge Function requires JWT verification.
-- The one-minute cleanup job is active and its latest HTTP response is 200.
-- Supabase security advisors contain no unresolved application-schema errors.
+Do not delete Render until all items are complete:
+
+- Trial client has passed the full API and image lifecycle.
+- Production CD has succeeded with manual approval.
+- Production client uses the Supabase API base URL.
+- Monitoring shows no client requests reaching Render.
+- The rollback observation period has ended.
+
+Afterward, remove both Render services, both Render deploy-hook secrets, `render.yaml`, the
+FastAPI fallback, and the Docker application files in a separate cleanup change.
 
 ## References
 
-- [Render Blueprint specification](https://render.com/docs/blueprint-spec)
-- [Render deploy hooks](https://render.com/docs/deploy-hooks)
-- [Render deploy and rollback behavior](https://render.com/docs/deploys)
-- [GitHub deployment environments](https://docs.github.com/actions/deployment/targeting-different-environments/using-environments-for-deployment)
+- [Supabase Edge Functions](https://supabase.com/docs/guides/functions)
+- [Function secrets](https://supabase.com/docs/guides/functions/secrets)
+- [Function routing](https://supabase.com/docs/guides/functions/routing)
+- [GitHub Actions function deployment](https://supabase.com/docs/guides/functions/examples/github-actions)
+- [Managing Supabase environments](https://supabase.com/docs/guides/deployment/managing-environments)
+- [Supabase CLI reference](https://supabase.com/docs/reference/cli/introduction)

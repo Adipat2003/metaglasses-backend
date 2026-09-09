@@ -1,5 +1,3 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-
 const maxImageBytes = 8 * 1024 * 1024;
 
 function serviceHeaders(serviceKey: string): Record<string, string> {

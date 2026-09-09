@@ -44,5 +44,15 @@ jobs:
       - name: Test
         run: uv run python -m pytest
 
+      - name: Check Edge Functions
+        run: |
+          docker run --rm --volume "$PWD:/work" --workdir /work \
+            denoland/deno:2.5.2 deno fmt --config supabase/functions/deno.json \
+            --check supabase/functions
+          docker run --rm --volume "$PWD:/work" --workdir /work \
+            denoland/deno:2.5.2 deno check --config supabase/functions/deno.json \
+            supabase/functions/api/index.ts \
+            supabase/functions/cleanup-pairing-images/index.ts
+
       - name: Build production container
         run: docker build --tag metaglasses-backend:test .

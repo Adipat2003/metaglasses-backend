@@ -144,6 +144,9 @@ enabled = true
 max_buckets = 10
 max_indexes = 5
 
+[functions.api]
+verify_jwt = false
+
 # Vector Buckets is available to Supabase Pro plan.
 # [storage.vector.buckets.documents]
 
