@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Application code lives in `app/`. `main.py` defines the FastAPI routes and app factory, `models.py` contains request and response models, `service.py` integrates with NVIDIA NIM, `auth.py` validates Supabase tokens, and `store.py` manages ephemeral pairing state. Tests live in `tests/` and mirror behavior at the API and configuration boundaries. Supabase development files are under `supabase/`; operational setup notes belong in `docs/`. Use the committed `.env.*.example` files as configuration templates, but keep real environment files untracked.
+The hosted API lives in `supabase/functions/api/`; its TypeScript handler owns routing, authentication, pairing operations, image Storage, and NVIDIA NIM integration. Database changes live in `supabase/migrations/`, while `cleanup-pairing-images` performs scheduled object cleanup. The Python code under `app/` is a temporary FastAPI rollback implementation and remains covered by tests during migration. Operational setup notes belong in `docs/`. Use committed example environment files as templates, but keep real environment files untracked.
 
 ## Build, Test, and Development Commands
 
@@ -10,12 +10,15 @@ Application code lives in `app/`. `main.py` defines the FastAPI routes and app f
 - `uv run uvicorn app.main:app --reload --env-file .env.local`: run the API with hot reload at `http://127.0.0.1:8000`.
 - `uv run ruff check .`: run import, style, and modernization checks.
 - `uv run python -m pytest`: run the complete unit test suite.
+- `npx --yes supabase@2.116.0 start`: run the local Supabase stack and Edge API.
+- `bash scripts/smoke-edge-api.sh`: exercise local Auth, pairing, Storage, and API behavior.
+- `docker run --rm --volume "$PWD:/work" --workdir /work denoland/deno:2.5.2 deno check --config supabase/functions/deno.json supabase/functions/api/index.ts supabase/functions/cleanup-pairing-images/index.ts`: type-check Edge Functions.
 
-Copy `.env.local.example` to `.env.local` before local development. See `docs/supabase.md` when testing authenticated flows against the local Supabase stack.
+Create the ignored signing-key and function environment files before local Supabase development. Copy `.env.local.example` only when exercising the FastAPI fallback. See `docs/local-development.md` for both workflows.
 
 ## Coding Style & Naming Conventions
 
-Target Python 3.12 and use four-space indentation. Ruff enforces `E`, `F`, `I`, and `UP` rules with a 100-character line limit. Use `snake_case` for modules, functions, variables, and tests; use `PascalCase` for classes and Pydantic models. Keep route handlers thin, put provider behavior in services, and inject fakes through `create_app` for testability. Add type annotations to public functions and asynchronous boundaries.
+Use Deno formatting with a 100-character line width for Edge Functions. Keep routed handlers small, validate every untrusted request field, and restrict privileged database RPCs to `service_role`. Target Python 3.12 for the fallback. Ruff enforces `E`, `F`, `I`, and `UP` rules with a 100-character line limit. Use `snake_case` for Python modules, functions, variables, and tests; use `PascalCase` for classes and Pydantic models.
 
 ## Testing Guidelines
 

@@ -1,3 +1,4 @@
+# Temporary rollback services. GitHub CD deploys Supabase Edge Functions, not this Blueprint.
 services:
   - type: web
     name: metaglasses-backend
