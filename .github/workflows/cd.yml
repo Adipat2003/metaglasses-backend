@@ -41,6 +41,9 @@ jobs:
           test -n "$SUPABASE_ACCESS_TOKEN"
           test -n "$SUPABASE_DB_PASSWORD"
 
+      - name: Prepare local CLI configuration
+        run: cp supabase/signing_keys.example.json supabase/signing_keys.json
+
       - name: Apply trial migrations
         run: |
           npx --yes supabase@2.116.0 link --project-ref "$SUPABASE_PROJECT_REF"
@@ -93,6 +96,9 @@ jobs:
         run: |
           test -n "$SUPABASE_ACCESS_TOKEN"
           test -n "$SUPABASE_DB_PASSWORD"
+
+      - name: Prepare local CLI configuration
+        run: cp supabase/signing_keys.example.json supabase/signing_keys.json
 
       - name: Apply production migrations
         run: |
