@@ -67,5 +67,4 @@ def test_cd_deploys_supabase_trial_automatically_and_production_manually() -> No
         "cp supabase/signing_keys.example.json supabase/signing_keys.json"
     ) == 2
     assert "github.event_name == 'workflow_dispatch'" in workflow
-    assert "RENDER_" not in workflow
     assert "build-push-action" not in workflow

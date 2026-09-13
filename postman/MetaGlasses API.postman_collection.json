@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "MetaGlasses API",
-    "description": "Generated from the backend API routes. Select an example environment, duplicate it in Postman, then populate its publishable key and test-user credentials.",
+    "description": "Generated from the Supabase Edge API routes. Select an example environment, duplicate it in Postman, then populate its publishable key and test-user credentials.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -166,7 +166,7 @@
       ]
     },
     {
-      "name": "FastAPI smoke flow",
+      "name": "Supabase Edge API smoke flow",
       "description": "Run in order: health, state, upload, chat, display, then delete.",
       "item": [
         {
