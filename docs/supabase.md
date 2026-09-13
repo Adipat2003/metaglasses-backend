@@ -218,6 +218,40 @@ Unused-index notices are expected immediately after provisioning and should be e
 again after representative traffic. Security warnings should be resolved before public
 production traffic.
 
+## Edge API request logs
+
+The `api` Edge Function writes one structured JSON log after every request, including CORS
+preflight requests. Each record contains:
+
+- `request_id`: a generated correlation identifier also returned in the `X-Request-ID`
+  response header.
+- `method`, `route`, `status`, and `duration_ms`: the request outcome without query strings or
+  request bodies.
+- `environment`: `local`, `trial`, `prod`, or `unknown` if configuration failed before the
+  environment could be resolved.
+- `error`: the safe error type, code, message, and optional upstream operation and status.
+
+Successful requests use `console.info`, client errors use `console.warn`, and server errors use
+`console.error`. Unexpected exceptions include a bounded, redacted stack trace. Logs never
+include authorization headers, API keys, request bodies, pairing tokens, signed URLs, user IDs,
+image IDs, or message contents.
+
+Open the function's **Logs** tab for individual records. In Logs Explorer, select the desired
+time range and use the following ClickHouse query:
+
+```sql
+select timestamp, severity_text, event_message
+from logs
+where source = 'function_logs'
+  and position(event_message, '"event":"api_request_completed"') > 0
+order by timestamp desc
+limit 100;
+```
+
+Copy the `X-Request-ID` value from a failing client response and search for it in
+`event_message` to correlate the client-visible failure with its server log. Supabase also
+records HTTP invocation metadata separately in `function_edge_logs`.
+
 ## Mobile integration
 
 The mobile app authenticates directly with Supabase. The Edge API accepts access tokens but

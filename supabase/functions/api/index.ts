@@ -14,6 +14,7 @@ const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info",
   "Access-Control-Allow-Methods": "DELETE, GET, POST, OPTIONS",
+  "Access-Control-Expose-Headers": "x-request-id",
   "Access-Control-Max-Age": "86400",
 };
 
@@ -38,14 +39,140 @@ interface StoredImage {
   created_at: string;
 }
 
+function defaultErrorCode(status: number): string {
+  const codes: Record<number, string> = {
+    400: "bad_request",
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not_found",
+    413: "payload_too_large",
+    415: "unsupported_media_type",
+    422: "validation_error",
+    429: "rate_limited",
+    503: "service_unavailable",
+  };
+  return codes[status] ?? (status >= 500 ? "internal_error" : "request_failed");
+}
+
 class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
     readonly authenticate = false,
+    readonly code = defaultErrorCode(status),
+    readonly context: Record<string, string | number | boolean> = {},
   ) {
     super(message);
+    this.name = "ApiError";
   }
+}
+
+interface RequestLog {
+  event: "api_request_completed";
+  service: "api";
+  environment: "local" | "trial" | "prod" | "unknown";
+  request_id: string;
+  method: string;
+  route: string;
+  status: number;
+  duration_ms: number;
+  error?: {
+    type: string;
+    code: string;
+    message: string;
+    context?: Record<string, string | number | boolean>;
+    stack?: string;
+  };
+}
+
+function requestEnvironment(): "local" | "trial" | "prod" | "unknown" {
+  try {
+    return environmentName();
+  } catch {
+    return "unknown";
+  }
+}
+
+function normalizedRoute(path: string): string {
+  if (/^\/v1\/images\/[^/]+$/.test(path)) return "/v1/images/:imageId";
+  return path;
+}
+
+function redactedErrorText(value: string): string {
+  return value
+    .replace(/Bearer\s+\S+/gi, "Bearer <redacted>")
+    .replace(
+      /([?&](?:apikey|key|pairingToken|signature|token)=)[^&\s]+/gi,
+      "$1<redacted>",
+    )
+    .replace(/\bsb_(?:publishable|secret)_[A-Za-z0-9._-]+/g, "<redacted-key>")
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "<redacted-jwt>");
+}
+
+function compactStack(error: Error): string | undefined {
+  if (!error.stack) return undefined;
+  return redactedErrorText(error.stack).split("\n").slice(0, 8).join("\n").slice(0, 4_000);
+}
+
+function requestLog(
+  request: Request,
+  path: string,
+  requestId: string,
+  status: number,
+  startedAt: number,
+  error?: unknown,
+): void {
+  const entry: RequestLog = {
+    event: "api_request_completed",
+    service: "api",
+    environment: requestEnvironment(),
+    request_id: requestId,
+    method: request.method,
+    route: normalizedRoute(path),
+    status,
+    duration_ms: Math.round((performance.now() - startedAt) * 100) / 100,
+  };
+
+  if (error instanceof ApiError) {
+    entry.error = {
+      type: error.name,
+      code: error.code,
+      message: error.message,
+      ...(Object.keys(error.context).length > 0 ? { context: error.context } : {}),
+    };
+  } else if (error instanceof Error) {
+    entry.error = {
+      type: error.name,
+      code: "unhandled_error",
+      message: redactedErrorText(error.message).slice(0, 1_000),
+      stack: compactStack(error),
+    };
+  } else if (error !== undefined) {
+    entry.error = {
+      type: "UnknownError",
+      code: "unhandled_error",
+      message: "A non-Error value was thrown.",
+    };
+  }
+
+  const serialized = JSON.stringify(entry);
+  if (status >= 500) {
+    console.error(serialized);
+  } else if (status >= 400) {
+    console.warn(serialized);
+  } else {
+    console.info(serialized);
+  }
+}
+
+function responseWithRequestId(response: Response, requestId: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set("X-Request-ID", requestId);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -153,7 +280,10 @@ async function rpc<T>(
     body: JSON.stringify(parameters),
   });
   if (!response.ok) {
-    throw new ApiError(503, "Pairing storage unavailable.");
+    throw new ApiError(503, "Pairing storage unavailable.", false, "pairing_rpc_failed", {
+      operation: name,
+      upstream_status: response.status,
+    });
   }
   return (await response.json()) as T;
 }
@@ -169,7 +299,9 @@ async function authenticate(request: Request): Promise<AuthenticatedUser> {
     headers: userHeaders(accessToken),
   });
   if (!response.ok) {
-    throw new ApiError(401, "Missing or invalid access token.", true);
+    throw new ApiError(401, "Missing or invalid access token.", true, "auth_rejected", {
+      upstream_status: response.status,
+    });
   }
   const user = (await response.json()) as { id?: unknown };
   if (typeof user.id !== "string" || !uuidPattern.test(user.id)) {
@@ -336,10 +468,14 @@ async function signedImageUrl(
       body: JSON.stringify({ expiresIn: signedUrlTtlSeconds }),
     },
   );
-  if (!response.ok) throw new ApiError(503, "Image storage unavailable.");
+  if (!response.ok) {
+    throw new ApiError(503, "Image storage unavailable.", false, "storage_sign_failed", {
+      upstream_status: response.status,
+    });
+  }
   const payload = (await response.json()) as { signedURL?: unknown };
   if (typeof payload.signedURL !== "string" || !payload.signedURL) {
-    throw new ApiError(503, "Image storage unavailable.");
+    throw new ApiError(503, "Image storage unavailable.", false, "storage_invalid_response");
   }
   return payload.signedURL.startsWith("http")
     ? payload.signedURL
@@ -394,14 +530,26 @@ async function generateResponse(
       }),
       signal: AbortSignal.timeout(30_000),
     });
-  } catch {
-    throw new ApiError(503, "Model provider unavailable.");
+  } catch (error) {
+    throw new ApiError(503, "Model provider unavailable.", false, "model_request_failed", {
+      failure_type: error instanceof Error ? error.name : "UnknownError",
+    });
   }
   if (response.status === 429) {
-    throw new ApiError(429, "Model rate limited. Back off and retry.");
+    throw new ApiError(
+      429,
+      "Model rate limited. Back off and retry.",
+      false,
+      "model_rate_limited",
+      {
+        upstream_status: response.status,
+      },
+    );
   }
   if (!response.ok) {
-    throw new ApiError(503, "Model provider unavailable.");
+    throw new ApiError(503, "Model provider unavailable.", false, "model_provider_error", {
+      upstream_status: response.status,
+    });
   }
   try {
     const payload = (await response.json()) as {
@@ -413,7 +561,7 @@ async function generateResponse(
     }
     return text.trim();
   } catch {
-    throw new ApiError(503, "Model provider unavailable.");
+    throw new ApiError(503, "Model provider unavailable.", false, "model_invalid_response");
   }
 }
 
@@ -625,7 +773,9 @@ async function handleImageUpload(
   );
   if (!upload.ok) {
     await removeImageMetadata(token, user.id, imageId).catch(() => undefined);
-    throw new ApiError(503, "Image storage unavailable.");
+    throw new ApiError(503, "Image storage unavailable.", false, "storage_upload_failed", {
+      upstream_status: upload.status,
+    });
   }
   return jsonResponse(
     {
@@ -655,7 +805,11 @@ async function handleImageDelete(
     headers: userHeaders(user.accessToken, "application/json"),
     body: JSON.stringify({ prefixes: [image.object_path] }),
   });
-  if (!deletion.ok) throw new ApiError(503, "Image storage unavailable.");
+  if (!deletion.ok) {
+    throw new ApiError(503, "Image storage unavailable.", false, "storage_delete_failed", {
+      upstream_status: deletion.status,
+    });
+  }
   await removeImageMetadata(token, user.id, imageId);
   return emptyResponse(204);
 }
@@ -671,36 +825,46 @@ function routePath(pathname: string): string {
 }
 
 Deno.serve(async (request: Request) => {
-  if (request.method === "OPTIONS") return emptyResponse(204);
-  const url = new URL(request.url);
-  const path = routePath(url.pathname);
+  const startedAt = performance.now();
+  const requestId = crypto.randomUUID();
+  let path = "/";
+  let response: Response;
+  let requestError: unknown;
+
   try {
-    if (request.method === "GET" && path === "/healthz") {
-      return jsonResponse({
+    const url = new URL(request.url);
+    path = routePath(url.pathname);
+    if (request.method === "OPTIONS") {
+      response = emptyResponse(204);
+    } else if (request.method === "GET" && path === "/healthz") {
+      response = jsonResponse({
         status: "ok",
         environment: environmentName(),
         auth: "required",
       });
+    } else if (request.method === "POST" && path === "/v1/state") {
+      response = await handleState(request);
+    } else if (request.method === "GET" && path === "/v1/display") {
+      response = await handleDisplay(url);
+    } else if (request.method === "POST" && path === "/v1/chat") {
+      response = await handleChat(request);
+    } else if (request.method === "POST" && path === "/v1/images") {
+      response = await handleImageUpload(request, url);
+    } else {
+      const imageDelete = path.match(/^\/v1\/images\/([^/]+)$/);
+      if (request.method === "DELETE" && imageDelete) {
+        response = await handleImageDelete(request, url, imageDelete[1]);
+      } else {
+        throw new ApiError(404, "Not found.");
+      }
     }
-    if (request.method === "POST" && path === "/v1/state") {
-      return await handleState(request);
-    }
-    if (request.method === "GET" && path === "/v1/display") {
-      return await handleDisplay(url);
-    }
-    if (request.method === "POST" && path === "/v1/chat") {
-      return await handleChat(request);
-    }
-    if (request.method === "POST" && path === "/v1/images") {
-      return await handleImageUpload(request, url);
-    }
-    const imageDelete = path.match(/^\/v1\/images\/([^/]+)$/);
-    if (request.method === "DELETE" && imageDelete) {
-      return await handleImageDelete(request, url, imageDelete[1]);
-    }
-    throw new ApiError(404, "Not found.");
   } catch (error) {
-    if (error instanceof ApiError) return errorResponse(error);
-    return errorResponse(new ApiError(500, "Internal server error."));
+    requestError = error;
+    response = error instanceof ApiError
+      ? errorResponse(error)
+      : errorResponse(new ApiError(500, "Internal server error."));
   }
+
+  requestLog(request, path, requestId, response.status, startedAt, requestError);
+  return responseWithRequestId(response, requestId);
 });
