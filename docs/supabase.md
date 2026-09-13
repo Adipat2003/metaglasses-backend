@@ -76,30 +76,25 @@ provides the user's name only on the first sign-in, so save it then if needed.
 
 ## Postman API testing
 
-Import the matching collection and example environment:
+Import `postman/MetaGlasses API.postman_collection.json` and the trial or production example
+environment. The Supabase URL is used for Auth, while the backend URL calls the deployed
+FastAPI rollback service. Duplicate the environment inside Postman before adding credentials.
+Never export or commit that populated copy.
 
-- Trial: `MetaGlasses Trial API.postman_collection.json`
-- Production: `MetaGlasses Production API.postman_collection.json`
-
-Every request URL is fully resolved to the selected hosted project. The environment contains
-only credentials and request data, so a stale URL variable cannot send a request to the wrong
-project. Duplicate the environment inside Postman before adding credentials. Never export or
-commit that populated copy.
-
-The generator resolves requests to these URLs:
+The checked-in examples configure both URLs correctly:
 
 | Environment | `supabase_url` | `backend_url` |
 | --- | --- | --- |
-| Trial | `https://uitdzmwfqtsohgffhuom.supabase.co` | `https://uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api` |
-| Production | `https://hxtdfghufjjmeltarffl.supabase.co` | `https://hxtdfghufjjmeltarffl.supabase.co/functions/v1/api` |
+| Trial | `https://uitdzmwfqtsohgffhuom.supabase.co` | `https://metaglasses-backend.onrender.com` |
+| Production | `https://hxtdfghufjjmeltarffl.supabase.co` | `https://metaglasses-backend-prod.onrender.com` |
 
 Fill `supabase_publishable_key`, `test_email`, and `test_password`, then send **Sign in and
-save bearer token**. For an image and chat test, run the **Edge API smoke flow** requests in
+save bearer token**. For an image and chat test, run the **FastAPI smoke flow** requests in
 order. Select a JPEG or PNG in the upload request and set the matching `Content-Type`. The
 upload test saves the returned `image_id`, and the chat request attaches it automatically.
 
-Run `node scripts/generate-postman-collection.mjs` after changing Edge API routes. The
-generator reads the handler's routed methods and paths, requires a request template for every
+Run `node scripts/generate-postman-collection.mjs` after changing FastAPI routes. The
+generator reads the FastAPI route decorators, requires a request template for every
 endpoint, and rewrites the collection and safe hosted environments. CI uses `--check` to catch
 missing endpoints and stale generated files.
 
