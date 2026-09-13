@@ -44,6 +44,9 @@ jobs:
       - name: Test
         run: uv run python -m pytest
 
+      - name: Check generated Postman collection
+        run: node scripts/generate-postman-collection.mjs --check
+
       - name: Check Edge Functions
         run: |
           docker run --rm --volume "$PWD:/work" --workdir /work \
