@@ -26,6 +26,9 @@ Pytest is configured to discover tests under `tests/`. Name files `test_*.py` an
 
 ## Commit & Pull Request Guidelines
 
+Never commit directly to `main`. Create a scoped branch for every change, push that branch,
+and merge it through a pull request after required checks pass.
+
 Recent commits use short, imperative, sentence-case subjects such as `Add Supabase authentication environments`. Keep each commit focused and include related tests or documentation. Pull requests should explain the behavior change, note configuration or security impact, link the relevant issue, and list validation commands run. Include screenshots only for changes affecting generated API documentation or another visible interface.
 
 ## Security & Configuration
