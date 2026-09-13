@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const apiSourcePath = resolve(root, "supabase/functions/api/index.ts");
-const collectionPath = resolve(root, "postman/MetaGlasses API.postman_collection.json");
 
 const hostedEnvironments = {
   Trial: {
@@ -211,25 +210,41 @@ function authRequests() {
   ];
 }
 
-function collection() {
+function collection(environmentName, values) {
+  const backendUrl = `${values.supabaseUrl}/functions/v1/api`;
+  const resolveUrl = (value) => value
+    .replaceAll("{{supabase_url}}", values.supabaseUrl)
+    .replaceAll("{{backend_url}}", backendUrl)
+    .replaceAll("{{app_redirect_url}}", values.redirectUrl);
+  const resolvedAuthRequests = authRequests();
+  const resolvedApiRequests = Object.fromEntries(
+    Object.entries(apiRequests).map(([route, item]) => [route, structuredClone(item)]),
+  );
+  for (const item of [
+    ...resolvedAuthRequests,
+    ...Object.values(resolvedApiRequests),
+  ]) {
+    item.request.url = resolveUrl(item.request.url);
+  }
+
   return {
     info: {
-      name: "MetaGlasses API",
-      description: "Generated from the routed Edge API. Select an example environment, duplicate it in Postman, then populate its publishable key and test-user credentials.",
+      name: `MetaGlasses ${environmentName} API`,
+      description: `Generated from the routed Edge API with fixed ${environmentName.toLowerCase()} URLs. Duplicate the matching example environment in Postman, then populate its publishable key and test-user credentials.`,
       schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     },
     item: [
-      { name: "Supabase Auth", item: authRequests() },
+      { name: "Supabase Auth", item: resolvedAuthRequests },
       {
         name: "Edge API smoke flow",
         description: "Run in order: health, state, upload, chat, display, then delete.",
         item: [
-          apiRequests["GET /healthz"],
-          apiRequests["POST /v1/state"],
-          apiRequests["POST /v1/images"],
-          apiRequests["POST /v1/chat"],
-          apiRequests["GET /v1/display"],
-          apiRequests["DELETE /v1/images/:image_id"],
+          resolvedApiRequests["GET /healthz"],
+          resolvedApiRequests["POST /v1/state"],
+          resolvedApiRequests["POST /v1/images"],
+          resolvedApiRequests["POST /v1/chat"],
+          resolvedApiRequests["GET /v1/display"],
+          resolvedApiRequests["DELETE /v1/images/:image_id"],
         ],
       },
     ],
@@ -239,10 +254,7 @@ function collection() {
 function environment(name, values) {
   const entries = {
     app_env: values.appEnv,
-    supabase_url: values.supabaseUrl,
-    backend_url: `${values.supabaseUrl}/functions/v1/api`,
     supabase_publishable_key: "",
-    app_redirect_url: values.redirectUrl,
     test_email: "",
     test_password: "",
     access_token: "",
@@ -262,8 +274,12 @@ const apiSource = await readFile(apiSourcePath, "utf8");
 assertRequestCoverage(discoverApiRoutes(apiSource));
 await mkdir(resolve(root, "postman"), { recursive: true });
 
-const outputs = new Map([[collectionPath, collection()]]);
+const outputs = new Map();
 for (const [name, values] of Object.entries(hostedEnvironments)) {
+  outputs.set(
+    resolve(root, `postman/MetaGlasses ${name} API.postman_collection.json`),
+    collection(name, values),
+  );
   outputs.set(
     resolve(root, `postman/MetaGlasses ${name}.example.postman_environment.json`),
     environment(name, values),

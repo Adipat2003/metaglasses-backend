@@ -76,11 +76,17 @@ provides the user's name only on the first sign-in, so save it then if needed.
 
 ## Postman API testing
 
-Import `postman/MetaGlasses API.postman_collection.json` and the trial or production example
-environment. Duplicate the environment inside Postman before adding credentials. Never export
-or commit that populated copy.
+Import the matching collection and example environment:
 
-The checked-in examples configure both URLs correctly:
+- Trial: `MetaGlasses Trial API.postman_collection.json`
+- Production: `MetaGlasses Production API.postman_collection.json`
+
+Every request URL is fully resolved to the selected hosted project. The environment contains
+only credentials and request data, so a stale URL variable cannot send a request to the wrong
+project. Duplicate the environment inside Postman before adding credentials. Never export or
+commit that populated copy.
+
+The generator resolves requests to these URLs:
 
 | Environment | `supabase_url` | `backend_url` |
 | --- | --- | --- |

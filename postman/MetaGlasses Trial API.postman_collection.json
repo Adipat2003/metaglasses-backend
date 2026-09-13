@@ -1,7 +1,7 @@
 {
   "info": {
-    "name": "MetaGlasses API",
-    "description": "Generated from the routed Edge API. Select an example environment, duplicate it in Postman, then populate its publishable key and test-user credentials.",
+    "name": "MetaGlasses Trial API",
+    "description": "Generated from the routed Edge API with fixed trial URLs. Duplicate the matching example environment in Postman, then populate its publishable key and test-user credentials.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -19,7 +19,7 @@
                 "type": "text"
               }
             ],
-            "url": "{{supabase_url}}/auth/v1/settings"
+            "url": "https://uitdzmwfqtsohgffhuom.supabase.co/auth/v1/settings"
           }
         },
         {
@@ -60,7 +60,7 @@
                 }
               }
             },
-            "url": "{{supabase_url}}/auth/v1/signup"
+            "url": "https://uitdzmwfqtsohgffhuom.supabase.co/auth/v1/signup"
           }
         },
         {
@@ -102,7 +102,7 @@
                 }
               }
             },
-            "url": "{{supabase_url}}/auth/v1/token?grant_type=password"
+            "url": "https://uitdzmwfqtsohgffhuom.supabase.co/auth/v1/token?grant_type=password"
           }
         },
         {
@@ -132,7 +132,7 @@
                 "type": "text"
               }
             ],
-            "url": "{{supabase_url}}/auth/v1/user"
+            "url": "https://uitdzmwfqtsohgffhuom.supabase.co/auth/v1/user"
           }
         },
         {
@@ -146,7 +146,7 @@
                 "type": "text"
               }
             ],
-            "url": "{{supabase_url}}/auth/v1/authorize?provider=google&redirect_to={{app_redirect_url}}"
+            "url": "https://uitdzmwfqtsohgffhuom.supabase.co/auth/v1/authorize?provider=google&redirect_to=glance-trial://auth/callback"
           }
         },
         {
@@ -160,7 +160,7 @@
                 "type": "text"
               }
             ],
-            "url": "{{supabase_url}}/auth/v1/authorize?provider=apple&redirect_to={{app_redirect_url}}"
+            "url": "https://uitdzmwfqtsohgffhuom.supabase.co/auth/v1/authorize?provider=apple&redirect_to=glance-trial://auth/callback"
           }
         }
       ]
@@ -188,7 +188,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{backend_url}}/healthz"
+            "url": "https://uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api/healthz"
           }
         },
         {
@@ -227,7 +227,7 @@
                 }
               }
             },
-            "url": "{{backend_url}}/v1/state",
+            "url": "https://uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api/v1/state",
             "description": "Run this before image upload or chat to register the pairing."
           }
         },
@@ -267,7 +267,7 @@
                 "src": ""
               }
             },
-            "url": "{{backend_url}}/v1/images?pairingToken={{pairing_token}}",
+            "url": "https://uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api/v1/images?pairingToken={{pairing_token}}",
             "description": "Select a JPEG file in Body. For PNG, change Content-Type to image/png."
           }
         },
@@ -312,7 +312,7 @@
                 }
               }
             },
-            "url": "{{backend_url}}/v1/chat",
+            "url": "https://uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api/v1/chat",
             "description": "Upload an image first. The upload request saves image_id automatically."
           }
         },
@@ -332,7 +332,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{backend_url}}/v1/display?token={{pairing_token}}",
+            "url": "https://uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api/v1/display?token={{pairing_token}}",
             "description": "The pairing token is the lens capability credential. No bearer token is used."
           }
         },
@@ -358,7 +358,7 @@
                 "type": "text"
               }
             ],
-            "url": "{{backend_url}}/v1/images/{{image_id}}?pairingToken={{pairing_token}}"
+            "url": "https://uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api/v1/images/{{image_id}}?pairingToken={{pairing_token}}"
           }
         }
       ]

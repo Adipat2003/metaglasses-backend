@@ -58,9 +58,10 @@ metadata expire with their pairing and are deleted by the scheduled cleanup func
 
 ## Postman
 
-Import the generated collection and the trial or production example environment from
-[`postman/`](postman/). Duplicate the selected environment inside Postman before adding the
-project publishable key or test-user credentials. The hosted URLs are already configured.
+Import the generated Trial or Production collection and its matching example environment from
+[`postman/`](postman/). Every request in each collection contains the exact hosted URL, so a
+stale Postman environment cannot redirect it to another backend. Duplicate the selected
+environment inside Postman before adding the project publishable key or test-user credentials.
 
 Regenerate the collection after changing the Edge API routes:
 
