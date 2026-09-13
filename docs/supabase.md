@@ -74,6 +74,29 @@ Keep provider secrets and Apple private keys outside the repository and mobile a
 For native iOS Sign in with Apple, send the Apple identity token and nonce to Supabase. Apple
 provides the user's name only on the first sign-in, so save it then if needed.
 
+## Postman API testing
+
+Import `postman/MetaGlasses API.postman_collection.json` and the trial or production example
+environment. Duplicate the environment inside Postman before adding credentials. Never export
+or commit that populated copy.
+
+The checked-in examples configure both URLs correctly:
+
+| Environment | `supabase_url` | `backend_url` |
+| --- | --- | --- |
+| Trial | `https://uitdzmwfqtsohgffhuom.supabase.co` | `https://uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api` |
+| Production | `https://hxtdfghufjjmeltarffl.supabase.co` | `https://hxtdfghufjjmeltarffl.supabase.co/functions/v1/api` |
+
+Fill `supabase_publishable_key`, `test_email`, and `test_password`, then send **Sign in and
+save bearer token**. For an image and chat test, run the **Edge API smoke flow** requests in
+order. Select a JPEG or PNG in the upload request and set the matching `Content-Type`. The
+upload test saves the returned `image_id`, and the chat request attaches it automatically.
+
+Run `node scripts/generate-postman-collection.mjs` after changing Edge API routes. The
+generator reads the handler's routed methods and paths, requires a request template for every
+endpoint, and rewrites the collection and safe hosted environments. CI uses `--check` to catch
+missing endpoints and stale generated files.
+
 ## Database schema
 
 The repository uses imperative SQL migrations under `supabase/migrations`. Apply them in

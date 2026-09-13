@@ -56,6 +56,21 @@ Attach the returned `imageId` to a user chat message:
 The Edge Function creates a 60-second signed Storage URL for the NVIDIA request. Images and
 metadata expire with their pairing and are deleted by the scheduled cleanup function.
 
+## Postman
+
+Import the generated collection and the trial or production example environment from
+[`postman/`](postman/). Duplicate the selected environment inside Postman before adding the
+project publishable key or test-user credentials. The hosted URLs are already configured.
+
+Regenerate the collection after changing the Edge API routes:
+
+```bash
+node scripts/generate-postman-collection.mjs
+```
+
+CI runs the generator in check mode. It fails when a routed endpoint has no Postman request
+template or when the generated files are stale.
+
 ## Local Supabase development
 
 Docker is required for the local Supabase stack.
