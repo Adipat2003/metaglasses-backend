@@ -3,7 +3,7 @@
 Local development supports two application runtimes:
 
 - The production-shaped Supabase Edge API with local Auth, Postgres, and Storage.
-- The legacy FastAPI service on the host or in Docker as a temporary rollback path.
+- The Python reference API on the host or in Docker for local contract testing.
 
 Real environment files, generated signing keys, OAuth credentials, and local Supabase state
 are ignored by Git.
@@ -18,7 +18,7 @@ are ignored by Git.
 This repository uses Supabase CLI `2.116.0` in documented commands. Keep the version
 pinned so local behavior does not change unexpectedly.
 
-## Legacy FastAPI only
+## Python reference API only
 
 Use this mode for unit tests and API work that does not need real Auth, shared Postgres, or
 Storage:
@@ -89,12 +89,12 @@ Content-Type: application/json
 {"pairingToken":"<32_HEX_CHARACTERS>","state":"listening"}
 ```
 
-## Legacy FastAPI with local Supabase
+## Python reference API with local Supabase
 
 The CLI prints the local publishable key. Copy it into the ignored environment file used by
-the fallback API.
+the reference API.
 
-### Run fallback FastAPI on the host
+### Run the Python reference API on the host
 
 ```bash
 cp .env.local-auth.example .env.local-auth
@@ -104,7 +104,7 @@ uv run uvicorn app.main:app --reload --env-file .env.local-auth
 
 The host process connects to Supabase at `127.0.0.1`.
 
-### Run fallback FastAPI in Docker
+### Run the Python reference API in Docker
 
 ```bash
 cp .env.docker.example .env.docker
@@ -112,7 +112,7 @@ cp .env.docker.example .env.docker
 docker compose up --build
 ```
 
-Start Supabase before Compose. The Compose project runs only the FastAPI container and uses
+Start Supabase before Compose. The Compose project runs only the Python API container and uses
 the Supabase containers already created by the CLI.
 
 To use a differently named ignored environment file:
@@ -151,8 +151,8 @@ API_ENV_FILE=.env.docker.local docker compose up --build
 | Supabase Postgres | `127.0.0.1:54322` |
 | Supabase Studio | `http://127.0.0.1:54323` |
 | Mailpit | `http://127.0.0.1:54324` |
-| Legacy FastAPI | `http://127.0.0.1:8000` |
-| Legacy FastAPI docs | `http://127.0.0.1:8000/docs` |
+| Python reference API | `http://127.0.0.1:8000` |
+| Python reference API docs | `http://127.0.0.1:8000/docs` |
 
 ## Local OAuth providers
 
@@ -198,7 +198,7 @@ Verify the primary Edge API:
 curl --fail http://127.0.0.1:54321/functions/v1/api/healthz
 ```
 
-Verify the fallback Docker service:
+Verify the Python reference Docker service:
 
 ```bash
 curl --fail http://127.0.0.1:8000/healthz
@@ -229,7 +229,7 @@ EXPECT_CHAT=true bash scripts/smoke-edge-api.sh
 
 ## Stop and clean up
 
-Stop only FastAPI:
+Stop only the Python reference API:
 
 ```bash
 docker compose down
@@ -253,7 +253,7 @@ destructive and should be used only when disposable local data can be recreated.
 - Inspect Edge Runtime logs with
   `docker logs supabase_edge_runtime_metaglasses-backend`.
 
-### Legacy FastAPI cannot reach Supabase
+### Python reference API cannot reach Supabase
 
 - Confirm `supabase status` reports all local services.
 - Confirm the API container uses `host.docker.internal`, not `127.0.0.1`, for Supabase
@@ -270,13 +270,13 @@ host-facing URL.
 
 - Confirm the private `Images` bucket exists in Studio.
 - Confirm all migrations were applied.
-- For the legacy FastAPI fallback, confirm `SUPABASE_PUBLISHABLE_KEY` matches the current
+- For the Python reference API, confirm `SUPABASE_PUBLISHABLE_KEY` matches the current
   local stack.
 
 ### Chat returns 503
 
 Confirm `NVIDIA_API_KEY` is populated in `supabase/functions/.env` for the Edge API or the
-selected FastAPI environment file for the fallback. Health, Auth, pairing, and Storage can
+selected local Python environment file. Health, Auth, pairing, and Storage can
 work without a model request, so a healthy response does not prove the NVIDIA credential is
 present.
 

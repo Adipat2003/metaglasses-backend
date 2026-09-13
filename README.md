@@ -1,9 +1,8 @@
 # MetaGlasses backend
 
 The hosted MetaGlasses API runs as a routed Supabase Edge Function. Supabase also provides
-Postgres, Auth, private image Storage, and scheduled image cleanup. The previous FastAPI and
-Render deployment remains in the repository temporarily as a rollback path during client
-cutover.
+Postgres, Auth, private image Storage, and scheduled image cleanup. All hosted backend
+environments run on Supabase.
 
 ## Hosted API
 
@@ -59,17 +58,17 @@ metadata expire with their pairing and are deleted by the scheduled cleanup func
 ## Postman
 
 Import the generated collection and the trial or production example environment from
-[`postman/`](postman/). The environments use the matching Supabase project for Auth and the
-deployed Render FastAPI service for backend requests. Duplicate the selected environment inside
-Postman before adding the project publishable key or test-user credentials.
+[`postman/`](postman/). The environments use the matching Supabase project for both Auth and
+Edge API requests. Duplicate the selected environment inside Postman before adding the project
+publishable key or test-user credentials.
 
-Regenerate the collection after changing the FastAPI routes:
+Regenerate the collection after changing the Edge API routes:
 
 ```bash
 node scripts/generate-postman-collection.mjs
 ```
 
-CI runs the generator in check mode. It fails when a FastAPI endpoint has no Postman request
+CI runs the generator in check mode. It fails when an Edge API endpoint has no Postman request
 template or when the generated files are stale.
 
 ## Local Supabase development
@@ -103,12 +102,12 @@ bash scripts/smoke-edge-api.sh
 ```
 
 See [Local development and Docker](docs/local-development.md) for local Auth, Storage,
-database, and legacy FastAPI instructions.
+database, and Python reference API instructions.
 
 ## CI and deployment
 
-CI validates the Python rollback service, TypeScript Edge Functions, database configuration,
-tests, and the fallback container build.
+CI validates the Python reference implementation, TypeScript Edge Functions, database
+configuration, tests, and generated Postman artifacts.
 
 After successful CI on `main`, CD automatically applies migrations and deploys functions to
 the trial Supabase project. Production is never deployed by a normal push. Run the `CD`
@@ -126,15 +125,14 @@ Each Supabase project requires this Edge Function secret:
 Supabase provides `SUPABASE_URL`, database connectivity, publishable keys, and secret keys to
 Edge Functions automatically. Do not copy those values into GitHub.
 
-See [Deployment and operations](docs/deployment.md) for setup, release, rollback, and cutover.
+See [Deployment and operations](docs/deployment.md) for setup, release, and recovery.
 
-## Legacy FastAPI fallback
+## Local Python reference implementation
 
-The `app/`, `Dockerfile`, Compose files, and `render.yaml` remain available during migration.
-They are not deployed by the current CD workflow. Remove the Render services and fallback
-code only after trial and production clients have been cut over and observed successfully.
+The Python API under `app/` remains available for local development and contract tests. It is
+not a hosted deployment target. Trial and production use the Supabase Edge API exclusively.
 
-Run the fallback service locally:
+Run the reference service locally:
 
 ```bash
 cp .env.local.example .env.local

@@ -56,6 +56,3 @@ jobs:
             denoland/deno:2.5.2 deno check --config supabase/functions/deno.json \
             supabase/functions/api/index.ts \
             supabase/functions/cleanup-pairing-images/index.ts
-
-      - name: Build production container
-        run: docker build --tag metaglasses-backend:test .
