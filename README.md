@@ -59,16 +59,17 @@ metadata expire with their pairing and are deleted by the scheduled cleanup func
 ## Postman
 
 Import the generated collection and the trial or production example environment from
-[`postman/`](postman/). Duplicate the selected environment inside Postman before adding the
-project publishable key or test-user credentials. The hosted URLs are already configured.
+[`postman/`](postman/). The environments use the matching Supabase project for Auth and the
+deployed Render FastAPI service for backend requests. Duplicate the selected environment inside
+Postman before adding the project publishable key or test-user credentials.
 
-Regenerate the collection after changing the Edge API routes:
+Regenerate the collection after changing the FastAPI routes:
 
 ```bash
 node scripts/generate-postman-collection.mjs
 ```
 
-CI runs the generator in check mode. It fails when a routed endpoint has no Postman request
+CI runs the generator in check mode. It fails when a FastAPI endpoint has no Postman request
 template or when the generated files are stale.
 
 ## Local Supabase development

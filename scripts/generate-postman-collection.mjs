@@ -3,18 +3,20 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const apiSourcePath = resolve(root, "supabase/functions/api/index.ts");
+const backendSourcePath = resolve(root, "app/main.py");
 const collectionPath = resolve(root, "postman/MetaGlasses API.postman_collection.json");
 
 const hostedEnvironments = {
   Trial: {
     appEnv: "trial",
     supabaseUrl: "https://uitdzmwfqtsohgffhuom.supabase.co",
+    backendUrl: "https://metaglasses-backend.onrender.com",
     redirectUrl: "glance-trial://auth/callback",
   },
   Production: {
     appEnv: "prod",
     supabaseUrl: "https://hxtdfghufjjmeltarffl.supabase.co",
+    backendUrl: "https://metaglasses-backend-prod.onrender.com",
     redirectUrl: "glance://auth/callback",
   },
 };
@@ -138,15 +140,12 @@ const apiRequests = {
   ),
 };
 
-function discoverApiRoutes(source) {
+function discoverBackendRoutes(source) {
   const routes = new Set();
-  const staticRoute = /request\.method === "(GET|POST|PUT|PATCH|DELETE)" && path === "([^"]+)"/g;
-  for (const match of source.matchAll(staticRoute)) routes.add(`${match[1]} ${match[2]}`);
-  if (
-    source.includes('const imageDelete = path.match(/^\\/v1\\/images\\/([^/]+)$/);') &&
-    source.includes('request.method === "DELETE" && imageDelete')
-  ) {
-    routes.add("DELETE /v1/images/:image_id");
+  const routeDecorator = /@app\.(get|post|put|patch|delete)\(\s*"([^"]+)"/g;
+  for (const match of source.matchAll(routeDecorator)) {
+    const path = match[2].replaceAll(/\{([^}]+)\}/g, ":$1");
+    routes.add(`${match[1].toUpperCase()} ${path}`);
   }
   return routes;
 }
@@ -215,13 +214,13 @@ function collection() {
   return {
     info: {
       name: "MetaGlasses API",
-      description: "Generated from the routed Edge API. Select an example environment, duplicate it in Postman, then populate its publishable key and test-user credentials.",
+      description: "Generated from the backend API routes. Select an example environment, duplicate it in Postman, then populate its publishable key and test-user credentials.",
       schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     },
     item: [
       { name: "Supabase Auth", item: authRequests() },
       {
-        name: "Edge API smoke flow",
+        name: "FastAPI smoke flow",
         description: "Run in order: health, state, upload, chat, display, then delete.",
         item: [
           apiRequests["GET /healthz"],
@@ -240,7 +239,7 @@ function environment(name, values) {
   const entries = {
     app_env: values.appEnv,
     supabase_url: values.supabaseUrl,
-    backend_url: `${values.supabaseUrl}/functions/v1/api`,
+    backend_url: values.backendUrl,
     supabase_publishable_key: "",
     app_redirect_url: values.redirectUrl,
     test_email: "",
@@ -258,8 +257,8 @@ function environment(name, values) {
   };
 }
 
-const apiSource = await readFile(apiSourcePath, "utf8");
-assertRequestCoverage(discoverApiRoutes(apiSource));
+const backendSource = await readFile(backendSourcePath, "utf8");
+assertRequestCoverage(discoverBackendRoutes(backendSource));
 await mkdir(resolve(root, "postman"), { recursive: true });
 
 const outputs = new Map([[collectionPath, collection()]]);
