@@ -252,6 +252,29 @@ Copy the `X-Request-ID` value from a failing client response and search for it i
 `event_message` to correlate the client-visible failure with its server log. Supabase also
 records HTTP invocation metadata separately in `function_edge_logs`.
 
+Error responses preserve the existing `detail` field and also include the HTTP status,
+request ID, structured error type and code, and safe provider context when available:
+
+```json
+{
+  "detail": "Model provider unavailable.",
+  "request_id": "b6de3d47-6e4d-4da9-88e6-6a38212b0d63",
+  "status": 503,
+  "error": {
+    "type": "ApiError",
+    "code": "model_provider_error",
+    "message": "Model provider unavailable.",
+    "context": {
+      "upstream_status": 403
+    }
+  }
+}
+```
+
+Only `upstream_status`, `failure_type`, and bounded, redacted provider error details can be
+returned as client-visible context. Internal operation names, raw provider bodies, and stack
+traces remain restricted to server logs.
+
 ## Mobile integration
 
 The mobile app authenticates directly with Supabase. The Edge API accepts access tokens but
