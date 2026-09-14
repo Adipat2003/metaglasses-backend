@@ -175,6 +175,35 @@ function responseWithRequestId(response: Response, requestId: string): Response 
   });
 }
 
+async function providerFailureContext(
+  response: Response,
+): Promise<Record<string, string | number | boolean>> {
+  const context: Record<string, string | number | boolean> = {
+    upstream_status: response.status,
+  };
+  if (!response.headers.get("content-type")?.toLowerCase().includes("application/json")) {
+    return context;
+  }
+
+  try {
+    const payload = await response.json() as Record<string, unknown>;
+    const error = typeof payload.error === "object" && payload.error !== null
+      ? payload.error as Record<string, unknown>
+      : payload;
+    const code = error.code;
+    const message = error.message ?? error.detail;
+    if (typeof code === "string" || typeof code === "number") {
+      context.provider_error_code = redactedErrorText(String(code)).slice(0, 200);
+    }
+    if (typeof message === "string") {
+      context.provider_error_message = redactedErrorText(message).slice(0, 500);
+    }
+  } catch {
+    // The upstream status remains useful when the provider error body is malformed.
+  }
+  return context;
+}
+
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
     status,
@@ -186,16 +215,44 @@ function emptyResponse(status: number): Response {
   return new Response(null, { status, headers: corsHeaders });
 }
 
-function errorResponse(error: ApiError): Response {
+function clientErrorContext(
+  context: Record<string, string | number | boolean>,
+): Record<string, string | number | boolean> {
+  const allowedKeys = new Set([
+    "failure_type",
+    "provider_error_code",
+    "provider_error_message",
+    "upstream_status",
+  ]);
+  return Object.fromEntries(
+    Object.entries(context).filter(([key]) => allowedKeys.has(key)),
+  );
+}
+
+function errorResponse(error: ApiError, requestId: string): Response {
   const headers = {
     ...corsHeaders,
     "Content-Type": "application/json",
     ...(error.authenticate ? { "WWW-Authenticate": "Bearer" } : {}),
   };
-  return new Response(JSON.stringify({ detail: error.message }), {
-    status: error.status,
-    headers,
-  });
+  const context = clientErrorContext(error.context);
+  return new Response(
+    JSON.stringify({
+      detail: error.message,
+      request_id: requestId,
+      status: error.status,
+      error: {
+        type: error.name,
+        code: error.code,
+        message: error.message,
+        ...(Object.keys(context).length > 0 ? { context } : {}),
+      },
+    }),
+    {
+      status: error.status,
+      headers,
+    },
+  );
 }
 
 function requiredEnvironment(name: string): string {
@@ -541,15 +598,17 @@ async function generateResponse(
       "Model rate limited. Back off and retry.",
       false,
       "model_rate_limited",
-      {
-        upstream_status: response.status,
-      },
+      await providerFailureContext(response),
     );
   }
   if (!response.ok) {
-    throw new ApiError(503, "Model provider unavailable.", false, "model_provider_error", {
-      upstream_status: response.status,
-    });
+    throw new ApiError(
+      503,
+      "Model provider unavailable.",
+      false,
+      "model_provider_error",
+      await providerFailureContext(response),
+    );
   }
   try {
     const payload = (await response.json()) as {
@@ -861,8 +920,8 @@ Deno.serve(async (request: Request) => {
   } catch (error) {
     requestError = error;
     response = error instanceof ApiError
-      ? errorResponse(error)
-      : errorResponse(new ApiError(500, "Internal server error."));
+      ? errorResponse(error, requestId)
+      : errorResponse(new ApiError(500, "Internal server error."), requestId);
   }
 
   requestLog(request, path, requestId, response.status, startedAt, requestError);
