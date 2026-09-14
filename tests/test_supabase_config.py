@@ -4,6 +4,20 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
+def test_environment_templates_are_centralized() -> None:
+    template_directory = ROOT / "config" / "env"
+    assert sorted(path.name for path in template_directory.glob("*.env.example")) == [
+        "edge-functions.env.example",
+        "oauth.env.example",
+        "python-authenticated.env.example",
+        "python-docker.env.example",
+        "python-local.env.example",
+    ]
+    assert not list(ROOT.glob(".env*.example"))
+    assert not (ROOT / "supabase" / "functions" / ".env.example").exists()
+    assert not (ROOT / "supabase" / "oauth.env.example").exists()
+
+
 def test_local_supabase_enables_google_and_apple_with_environment_credentials() -> None:
     config_path = ROOT / "supabase" / "config.toml"
     config = tomllib.loads(config_path.read_text(encoding="utf-8"))

@@ -21,9 +21,9 @@ Append the existing route to the environment base URL:
 - `DELETE /v1/images/{image_id}`
 
 Phone routes require a Supabase user access token in `Authorization: Bearer <token>`. The
-lens display route uses the random pairing token as its capability credential. All routes
-currently return permissive CORS headers as requested. CORS does not replace authentication
-or pairing ownership enforcement.
+lens display route uses the random pairing token as its capability credential. The Edge API
+returns permissive CORS headers. CORS does not replace authentication or pairing ownership
+enforcement.
 
 ## Temporary images
 
@@ -52,7 +52,7 @@ Attach the returned `imageId` to a user chat message:
 }
 ```
 
-The Edge Function creates a 60-second signed Storage URL for the NVIDIA request. Images and
+The Edge Function creates a 10-minute signed Storage URL for the NVIDIA request. Images and
 metadata expire with their pairing and are deleted by the scheduled cleanup function.
 
 ## Postman
@@ -78,7 +78,7 @@ Docker is required for the local Supabase stack.
 ```bash
 cp supabase/signing_keys.example.json supabase/signing_keys.json
 npx --yes supabase@2.116.0 gen signing-key --algorithm ES256 --append
-cp supabase/functions/.env.example supabase/functions/.env
+cp config/env/edge-functions.env.example supabase/functions/.env
 npx --yes supabase@2.116.0 start
 ```
 
@@ -135,7 +135,7 @@ not a hosted deployment target. Trial and production use the Supabase Edge API e
 Run the reference service locally:
 
 ```bash
-cp .env.local.example .env.local
+cp config/env/python-local.env.example .env.local
 uv sync --all-groups
 uv run uvicorn app.main:app --reload --env-file .env.local
 ```
@@ -152,6 +152,9 @@ docker run --rm --volume "$PWD:/work" --workdir /work \
   denoland/deno:2.5.2 deno check --config supabase/functions/deno.json \
   supabase/functions/api/index.ts \
   supabase/functions/cleanup-pairing-images/index.ts
+docker run --rm --volume "$PWD:/work" --workdir /work \
+  denoland/deno:2.5.2 deno test --config supabase/functions/deno.json \
+  supabase/functions/api/nvidia_test.ts
 ```
 
 ## Documentation

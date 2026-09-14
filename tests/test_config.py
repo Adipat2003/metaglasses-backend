@@ -17,7 +17,7 @@ def test_local_environment_explicitly_allows_auth_bypass() -> None:
     assert settings.pairing_ttl_seconds == 3600
     assert settings.max_images_per_pairing == 10
     assert settings.max_image_bytes == 8 * 1024 * 1024
-    assert settings.image_signed_url_ttl_seconds == 60
+    assert settings.image_signed_url_ttl_seconds == 600
 
 
 @pytest.mark.parametrize("app_env", ["trial", "prod"])

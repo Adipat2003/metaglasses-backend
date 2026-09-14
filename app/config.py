@@ -31,7 +31,7 @@ class Settings:
     pairing_ttl_seconds: int = 3600
     max_images_per_pairing: int = 10
     max_image_bytes: int = 8 * 1024 * 1024
-    image_signed_url_ttl_seconds: int = 60
+    image_signed_url_ttl_seconds: int = 10 * 60
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Settings":
@@ -144,7 +144,7 @@ class Settings:
         max_images_per_pairing = _positive_int(values, "MAX_IMAGES_PER_PAIRING", 10)
         max_image_bytes = _positive_int(values, "MAX_IMAGE_BYTES", 8 * 1024 * 1024)
         image_signed_url_ttl_seconds = _positive_int(
-            values, "IMAGE_SIGNED_URL_TTL_SECONDS", 60
+            values, "IMAGE_SIGNED_URL_TTL_SECONDS", 10 * 60
         )
 
         return cls(

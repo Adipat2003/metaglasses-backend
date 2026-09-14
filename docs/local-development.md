@@ -24,7 +24,7 @@ Use this mode for unit tests and API work that does not need real Auth, shared P
 Storage:
 
 ```bash
-cp .env.local.example .env.local
+cp config/env/python-local.env.example .env.local
 uv sync --all-groups
 uv run uvicorn app.main:app --reload --env-file .env.local
 ```
@@ -46,7 +46,7 @@ Generate a developer-only ES256 signing key before the first start:
 ```bash
 cp supabase/signing_keys.example.json supabase/signing_keys.json
 npx --yes supabase@2.116.0 gen signing-key --algorithm ES256 --append
-cp supabase/functions/.env.example supabase/functions/.env
+cp config/env/edge-functions.env.example supabase/functions/.env
 npx --yes supabase@2.116.0 start
 ```
 
@@ -97,7 +97,7 @@ the reference API.
 ### Run the Python reference API on the host
 
 ```bash
-cp .env.local-auth.example .env.local-auth
+cp config/env/python-authenticated.env.example .env.local-auth
 # Set SUPABASE_PUBLISHABLE_KEY and NVIDIA_API_KEY in .env.local-auth.
 uv run uvicorn app.main:app --reload --env-file .env.local-auth
 ```
@@ -107,7 +107,7 @@ The host process connects to Supabase at `127.0.0.1`.
 ### Run the Python reference API in Docker
 
 ```bash
-cp .env.docker.example .env.docker
+cp config/env/python-docker.env.example .env.docker
 # Set SUPABASE_PUBLISHABLE_KEY and NVIDIA_API_KEY in .env.docker.
 docker compose up --build
 ```
@@ -121,9 +121,9 @@ To use a differently named ignored environment file:
 API_ENV_FILE=.env.docker.local docker compose up --build
 ```
 
-## Legacy Docker environment
+## Docker environment details
 
-`.env.docker.example` contains the correct container-to-host endpoints:
+`config/env/python-docker.env.example` contains the correct container-to-host endpoints:
 
 | Variable | Value or source |
 | --- | --- |
@@ -159,7 +159,7 @@ API_ENV_FILE=.env.docker.local docker compose up --build
 OAuth configuration is optional. Copy the ignored template:
 
 ```bash
-cp supabase/oauth.env.example supabase/oauth.env
+cp config/env/oauth.env.example supabase/oauth.env
 set -a
 source supabase/oauth.env
 set +a
@@ -190,6 +190,9 @@ docker run --rm --volume "$PWD:/work" --workdir /work \
   denoland/deno:2.5.2 deno check --config supabase/functions/deno.json \
   supabase/functions/api/index.ts \
   supabase/functions/cleanup-pairing-images/index.ts
+docker run --rm --volume "$PWD:/work" --workdir /work \
+  denoland/deno:2.5.2 deno test --config supabase/functions/deno.json \
+  supabase/functions/api/nvidia_test.ts
 ```
 
 Verify the primary Edge API:
@@ -276,9 +279,14 @@ host-facing URL.
 ### Chat returns 503
 
 Confirm `NVIDIA_API_KEY` is populated in `supabase/functions/.env` for the Edge API or the
-selected local Python environment file. Health, Auth, pairing, and Storage can
-work without a model request, so a healthy response does not prove the NVIDIA credential is
-present.
+selected local Python environment file. Health, Auth, pairing, and Storage can work without a
+model request, so a healthy response does not prove the NVIDIA credential is present. For the
+Edge API, inspect the structured `function_logs` record by `request_id`:
+
+- `model_request_failed` indicates a timeout or network failure.
+- `model_pending_response_invalid` indicates an invalid NVIDIA polling response.
+- `model_provider_error` indicates a completed non-success provider response.
+- `model_invalid_response` indicates a successful provider response without usable text.
 
 ## References
 
