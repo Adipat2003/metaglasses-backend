@@ -1,7 +1,9 @@
+import { NvidiaPendingResponseError, resolveNvidiaResponse } from "./nvidia.ts";
+
 const pairingTtlSeconds = 3600;
 const maxImagesPerPairing = 10;
 const maxImageBytes = 8 * 1024 * 1024;
-const signedUrlTtlSeconds = 60;
+const signedUrlTtlSeconds = 10 * 60;
 const maxTranscriptBytes = 256_000;
 const defaultNvidiaBaseUrl = "https://integrate.api.nvidia.com/v1";
 const defaultNvidiaModel = "moonshotai/kimi-k3";
@@ -567,6 +569,7 @@ async function generateResponse(
   const baseUrl = (Deno.env.get("NVIDIA_BASE_URL") ?? defaultNvidiaBaseUrl)
     .replace(/\/$/, "");
   const model = Deno.env.get("NVIDIA_MODEL")?.trim() || defaultNvidiaModel;
+  const deadlineMilliseconds = Date.now() + nvidiaRequestTimeoutMilliseconds;
   let response: Response;
   try {
     response = await fetch(`${baseUrl}/chat/completions`, {
@@ -589,7 +592,14 @@ async function generateResponse(
       }),
       signal: AbortSignal.timeout(nvidiaRequestTimeoutMilliseconds),
     });
+    response = await resolveNvidiaResponse(response, {
+      apiKey,
+      deadlineMilliseconds,
+    });
   } catch (error) {
+    if (error instanceof NvidiaPendingResponseError) {
+      throw new ApiError(503, "Model provider unavailable.", false, error.code, error.context);
+    }
     throw new ApiError(503, "Model provider unavailable.", false, "model_request_failed", {
       failure_type: error instanceof Error ? error.name : "UnknownError",
     });
@@ -622,7 +632,9 @@ async function generateResponse(
     }
     return text.trim();
   } catch {
-    throw new ApiError(503, "Model provider unavailable.", false, "model_invalid_response");
+    throw new ApiError(503, "Model provider unavailable.", false, "model_invalid_response", {
+      upstream_status: response.status,
+    });
   }
 }
 
