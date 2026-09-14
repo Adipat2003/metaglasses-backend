@@ -275,6 +275,10 @@ Only `upstream_status`, `failure_type`, and bounded, redacted provider error det
 returned as client-visible context. Internal operation names, raw provider bodies, and stack
 traces remain restricted to server logs.
 
+NVIDIA can return HTTP 202 while an image request is still processing. The API follows the
+provider's `NVCF-REQID` status URL until it receives a completed response or reaches the request
+deadline. Signed image URLs remain valid for 10 minutes to cover provider queueing and polling.
+
 ## Mobile integration
 
 The mobile app authenticates directly with Supabase. The Edge API accepts access tokens but

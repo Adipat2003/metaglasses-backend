@@ -26,7 +26,8 @@ Add this secret under **Edge Functions > Secrets** in both projects:
 `moonshotai/kimi-k3` and `https://integrate.api.nvidia.com/v1`.
 Chat requests use low reasoning effort and allow NVIDIA up to five minutes to respond. Supabase
 can still terminate a synchronous request after its 150-second request idle timeout, before the
-application timeout expires.
+application timeout expires. Pending NVIDIA responses are polled using their `NVCF-REQID`, and
+signed image URLs remain valid for 10 minutes so queued inference can retrieve them.
 
 Supabase automatically injects the project URL, database URL, publishable keys, and secret
 keys into its function environment. Do not add database URLs, database passwords, user
