@@ -24,6 +24,8 @@ Add this secret under **Edge Functions > Secrets** in both projects:
 
 `NVIDIA_MODEL` and `NVIDIA_BASE_URL` are optional overrides. Defaults are
 `moonshotai/kimi-k3` and `https://integrate.api.nvidia.com/v1`.
+Chat requests use low reasoning effort and allow NVIDIA up to 90 seconds to respond, leaving
+room below Supabase's 150-second request idle timeout for authentication and persistence.
 
 Supabase automatically injects the project URL, database URL, publishable keys, and secret
 keys into its function environment. Do not add database URLs, database passwords, user
