@@ -5,6 +5,7 @@ const signedUrlTtlSeconds = 60;
 const maxTranscriptBytes = 256_000;
 const defaultNvidiaBaseUrl = "https://integrate.api.nvidia.com/v1";
 const defaultNvidiaModel = "moonshotai/kimi-k3";
+const nvidiaRequestTimeoutMilliseconds = 90_000;
 const systemPrompt = `You are the MetaGlasses step-by-step voice assistant.
 Answer the user's latest request with exactly one practical next step in one short,
 plain-text sentence. Keep the answer concise enough to fit on a small wearable lens.
@@ -582,10 +583,11 @@ async function generateResponse(
           ...messages.map((message) => modelMessage(message, imageUrls)),
         ],
         max_tokens: 160,
+        reasoning_effort: "low",
         stream: false,
         temperature: 0.2,
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(nvidiaRequestTimeoutMilliseconds),
     });
   } catch (error) {
     throw new ApiError(503, "Model provider unavailable.", false, "model_request_failed", {
