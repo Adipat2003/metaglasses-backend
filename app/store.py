@@ -76,7 +76,7 @@ class PairingStoreProtocol(Protocol):
 
 
 class PairingStore:
-    """Ephemeral, process-local pairing state for the v0.1 deployment."""
+    """Ephemeral, process-local pairing state for the Python reference API."""
 
     def __init__(self, ttl_seconds: int | None = None) -> None:
         configured_ttl = ttl_seconds or int(os.getenv("PAIRING_TTL_SECONDS", "3600"))

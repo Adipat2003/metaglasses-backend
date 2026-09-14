@@ -89,9 +89,10 @@ The checked-in examples configure both URLs correctly:
 | Production | `https://hxtdfghufjjmeltarffl.supabase.co` | `https://hxtdfghufjjmeltarffl.supabase.co/functions/v1/api` |
 
 Fill `supabase_publishable_key`, `test_email`, and `test_password`, then send **Sign in and
-save bearer token**. For an image and chat test, run the **Supabase Edge API smoke flow** requests in
-order. Select a JPEG or PNG in the upload request and set the matching `Content-Type`. The
-upload test saves the returned `image_id`, and the chat request attaches it automatically.
+save bearer token**. For an image and chat test, run the **Supabase Edge API smoke flow**
+requests in order. Select a JPEG or PNG in the upload request and set the matching
+`Content-Type`. The upload test saves the returned `image_id`, and the chat request attaches
+it automatically.
 
 Run `node scripts/generate-postman-collection.mjs` after changing Edge API routes. The
 generator reads the Edge Function route conditions, requires a request template for every
@@ -149,8 +150,8 @@ Storage policies require all of the following:
 - The same user owns the active, unexpired pairing.
 - The metadata row is active and unexpired.
 
-The Edge API passes a signed URL to NVIDIA only during the model request. The URL lasts 60
-seconds, while the underlying object remains bound to the pairing expiry.
+The Edge API passes a signed URL to NVIDIA only during the model request. The URL lasts 10
+minutes, while the underlying object remains bound to the pairing expiry.
 
 The `cleanup-pairing-images` Edge Function:
 

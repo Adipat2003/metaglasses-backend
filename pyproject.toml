@@ -1,7 +1,7 @@
 [project]
 name = "metaglasses-backend"
 version = "0.1.0"
-description = "FastAPI service for the MetaGlasses phone-to-lens text loop."
+description = "Supabase Edge API with a Python reference implementation for MetaGlasses."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

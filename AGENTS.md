@@ -1,36 +1,68 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Sources of Truth
 
-The hosted API lives in `supabase/functions/api/`; its TypeScript handler owns routing, authentication, pairing operations, image Storage, and NVIDIA NIM integration. Database changes live in `supabase/migrations/`, while `cleanup-pairing-images` performs scheduled object cleanup. The Python code under `app/` is a local reference implementation and remains covered by tests. Operational setup notes belong in `docs/`. Use committed example environment files as templates, but keep real environment files untracked.
+Use this map before searching the repository:
 
-## Build, Test, and Development Commands
+| Concern | Source of truth |
+| --- | --- |
+| Hosted API routes, auth, errors, and Storage | `supabase/functions/api/index.ts` |
+| NVIDIA submission, polling, and tests | `supabase/functions/api/nvidia.ts`, `nvidia_test.ts` |
+| Database schema, RLS, RPCs, and schedules | `supabase/migrations/` |
+| Cleanup worker | `supabase/functions/cleanup-pairing-images/index.ts` |
+| Local Python reference API | `app/` and `tests/` |
+| Environment templates | `config/env/` |
+| Generated API client artifacts | `scripts/generate-postman-collection.mjs` |
+| Local setup, deployment, and security | `docs/` |
 
-- `uv sync --all-groups`: create or update the local environment from `uv.lock`, including development tools.
-- `uv run uvicorn app.main:app --reload --env-file .env.local`: run the API with hot reload at `http://127.0.0.1:8000`.
-- `uv run ruff check .`: run import, style, and modernization checks.
-- `uv run python -m pytest`: run the complete unit test suite.
-- `npx --yes supabase@2.116.0 start`: run the local Supabase stack and Edge API.
-- `bash scripts/smoke-edge-api.sh`: exercise local Auth, pairing, Storage, and API behavior.
-- `docker run --rm --volume "$PWD:/work" --workdir /work denoland/deno:2.5.2 deno check --config supabase/functions/deno.json supabase/functions/api/index.ts supabase/functions/cleanup-pairing-images/index.ts`: type-check Edge Functions.
+Trial and production run only the Supabase Edge API. Treat `app/` as a local reference, not a
+deployment target. Never edit an applied migration or hand-edit generated Postman JSON.
 
-Create the ignored signing-key and function environment files before local Supabase development. Copy `.env.local.example` only when exercising the local Python reference implementation. See `docs/local-development.md` for both workflows.
+## Efficient Navigation
 
-## Coding Style & Naming Conventions
+Search the smallest relevant area first. Skip `uv.lock` and generated `postman/*.json` unless
+they are directly relevant.
 
-Use Deno formatting with a 100-character line width for Edge Functions. Keep routed handlers small, validate every untrusted request field, and restrict privileged database RPCs to `service_role`. Target Python 3.12 for the reference implementation. Ruff enforces `E`, `F`, `I`, and `UP` rules with a 100-character line limit. Use `snake_case` for Python modules, functions, variables, and tests; use `PascalCase` for classes and Pydantic models.
+```bash
+rg -n 'routePath|Deno.serve' supabase/functions/api
+rg -n 'NVIDIA|model_' supabase/functions/api docs
+rg -n 'create or replace function|create policy' supabase/migrations
+rg -n 'operationId|@app\.' app tests
+rg -n 'PROJECT_REF|SUPABASE_' .github docs supabase
+```
 
-## Testing Guidelines
+When behavior and documentation disagree, verify the implementation and tests, then update the
+documentation in the same change.
 
-Pytest is configured to discover tests under `tests/`. Name files `test_*.py` and tests `test_<expected_behavior>`. Keep unit tests deterministic: `tests/conftest.py` disables authentication locally, while protected-route tests inject a fake verifier. Add regression coverage for status codes, response contracts, configuration validation, and provider error mapping. No numeric coverage threshold is configured.
+## Development and Validation
 
-## Commit & Pull Request Guidelines
+- `uv sync --locked --all-groups`: install the Python 3.12 environment.
+- `uv run ruff check .`: lint Python.
+- `uv run python -m pytest`: run Python and repository configuration tests.
+- `node scripts/generate-postman-collection.mjs --check`: verify generated Postman files.
+- `npx --yes supabase@2.116.0 start`: run local Supabase.
+- `bash scripts/smoke-edge-api.sh`: test local Auth, pairing, Storage, and API behavior.
 
-Never commit directly to `main`. Create a scoped branch for every change, push that branch,
-and merge it through a pull request after required checks pass.
+Run the pinned Deno formatting, type-checking, and test commands from
+`docs/local-development.md`.
 
-Recent commits use short, imperative, sentence-case subjects such as `Add Supabase authentication environments`. Keep each commit focused and include related tests or documentation. Pull requests should explain the behavior change, note configuration or security impact, link the relevant issue, and list validation commands run. Include screenshots only for changes affecting generated API documentation or another visible interface.
+## Style and Tests
 
-## Security & Configuration
+Format TypeScript with the Deno config at a 100-character width. Keep handlers small, validate
+untrusted fields, and limit privileged RPCs to `service_role`. Python uses Ruff rules `E`, `F`,
+`I`, and `UP`, `snake_case` names, and `PascalCase` classes. Name tests
+`test_<expected_behavior>`. Cover response contracts, configuration, security boundaries, and
+provider error mapping.
 
-Never commit API keys, access tokens, generated signing keys, or populated `.env` files. The backend validates public Supabase JWKS data and should not receive service-role credentials. Authentication bypass is valid only with `APP_ENV=local`; hosted environments must use HTTPS and explicit CORS origins.
+## Security and Configuration
+
+Copy the required template from `config/env/` to the ignored runtime path documented in
+`docs/local-development.md`. Never commit populated environment files, access tokens, API keys,
+database passwords, signing keys, or private URLs. Authentication bypass is valid only with
+`APP_ENV=local`. Hosted environments require HTTPS and explicit CORS origins.
+
+## Git and Pull Requests
+
+Never commit directly to `main`. Create a scoped branch, make focused imperative commits, push,
+and open a pull request. Summarize behavior, configuration or security impact, linked issues when
+available, and validation commands. Include screenshots only for visible interface changes.

@@ -54,7 +54,7 @@ values into source control, workflow logs, issues, or chat.
 2. Run Ruff.
 3. Run Pytest contract and configuration tests.
 4. Verify that generated Postman artifacts match the Edge API routes.
-5. Check Deno formatting and TypeScript types for both Edge Functions.
+5. Check Deno formatting, TypeScript types, and NVIDIA polling tests.
 
 CI does not deploy anything.
 
@@ -108,7 +108,7 @@ Expected hosted responses identify `trial` or `prod`, use `"status":"ok"`, and r
 
 ## CORS policy
 
-The Edge API currently sends `Access-Control-Allow-Origin: *` and does not allow credentialed
+The Edge API sends `Access-Control-Allow-Origin: *` and does not allow credentialed
 browser cookies. Supabase bearer authentication is still required for phone operations.
 This permits JavaScript from any origin to call the API when it possesses a valid user token.
 
