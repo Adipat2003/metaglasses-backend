@@ -11,3 +11,4 @@ supabase/signing_keys.json
 supabase/oauth.env
 /postman/*.postman_environment.json
 !/postman/*.example.postman_environment.json
+graphify-out/
