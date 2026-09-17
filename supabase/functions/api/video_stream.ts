@@ -3,7 +3,13 @@ export const maxPendingVideoMessages = 8;
 export const maxVideoSessionMilliseconds = 120_000;
 
 export type VideoStreamControl =
-  | { type: "start"; contentType: string; codec?: string }
+  | {
+    type: "start";
+    contentType: string;
+    codec?: string;
+    mode: "transport" | "nvidia";
+    prompt: string;
+  }
   | { type: "ping" }
   | { type: "stop" };
 
@@ -58,7 +64,19 @@ export function parseVideoStreamControl(value: string): VideoStreamControl {
     throw new VideoStreamProtocolError("start.contentType must be a valid video media type.");
   }
   const codec = optionalCodec(message.codec);
-  return { type: "start", contentType, ...(codec ? { codec } : {}) };
+  const mode = message.mode ?? "transport";
+  if (mode !== "transport" && mode !== "nvidia") {
+    throw new VideoStreamProtocolError("mode must be transport or nvidia.");
+  }
+  if (mode === "nvidia" && contentType.split(";", 1)[0].trim() !== "video/mp4") {
+    throw new VideoStreamProtocolError("NVIDIA mode requires complete video/mp4 clips.");
+  }
+  const prompt = message.prompt ??
+    "Describe the visible actions in this video in one short sentence.";
+  if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 1_200) {
+    throw new VideoStreamProtocolError("prompt must contain 1 to 1200 characters.");
+  }
+  return { type: "start", contentType, mode, prompt: prompt.trim(), ...(codec ? { codec } : {}) };
 }
 
 export async function videoChunkByteLength(value: unknown): Promise<number | null> {

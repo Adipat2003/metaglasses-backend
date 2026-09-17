@@ -1,4 +1,5 @@
 import { NvidiaPendingResponseError, resolveNvidiaResponse } from "./nvidia.ts";
+import { analyzeVideoClip, VideoModelError } from "./nvidia_video.ts";
 import {
   maxPendingVideoMessages,
   maxVideoChunkBytes,
@@ -928,6 +929,9 @@ async function handleVideoStream(
   const sessionId = crypto.randomUUID();
   const startedAt = performance.now();
   let started = false;
+  let inferencePrompt: string | undefined;
+  let inference: AbortController | undefined;
+  let stopping = false;
   let chunkCount = 0;
   let byteCount = 0;
   let pendingMessageCount = 0;
@@ -944,6 +948,8 @@ async function handleVideoStream(
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
   };
   const protocolFailure = (message: string, code = 1002): void => {
+    stopping = true;
+    inference?.abort();
     send({ type: "error", code: "video_stream_protocol_error", message });
     socket.close(code, message.slice(0, 120));
   };
@@ -960,11 +966,14 @@ async function handleVideoStream(
       send({ type: "reconnect_required", reason: "session_limit" });
     }, maxVideoSessionMilliseconds - 5_000);
     closeTimer = setTimeout(() => {
+      stopping = true;
+      inference?.abort();
       socket.close(1012, "Reconnect to continue streaming.");
     }, maxVideoSessionMilliseconds);
   };
 
   const processMessage = async (data: unknown): Promise<void> => {
+    if (stopping || socket.readyState !== WebSocket.OPEN) return;
     if (typeof data === "string") {
       const control = parseVideoStreamControl(data);
       if (control.type === "ping") {
@@ -972,6 +981,8 @@ async function handleVideoStream(
         return;
       }
       if (control.type === "stop") {
+        stopping = true;
+        inference?.abort();
         send({ type: "stopped", chunkCount, byteCount });
         socket.close(1000, "Stream stopped by client.");
         return;
@@ -979,10 +990,15 @@ async function handleVideoStream(
       if (started) {
         throw new VideoStreamProtocolError("The stream has already started.");
       }
+      if (control.mode === "nvidia") {
+        requiredEnvironment("NVIDIA_API_KEY");
+        inferencePrompt = control.prompt;
+      }
       started = true;
       send({
         type: "started",
         contentType: control.contentType,
+        mode: control.mode,
         ...(control.codec ? { codec: control.codec } : {}),
       });
       return;
@@ -1005,9 +1021,49 @@ async function handleVideoStream(
     chunkCount += 1;
     byteCount += byteLength;
     send({ type: "ack", sequence: chunkCount, byteSize: byteLength, totalBytes: byteCount });
+    if (inferencePrompt !== undefined) {
+      const sequence = chunkCount;
+      if (inference) {
+        send({ type: "dropped", sequence, reason: "model_busy" });
+        return;
+      }
+      const controller = new AbortController();
+      inference = controller;
+      const bytes = data instanceof Blob
+        ? new Uint8Array(await data.arrayBuffer())
+        : data instanceof ArrayBuffer
+        ? new Uint8Array(data)
+        : ArrayBuffer.isView(data)
+        ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+        : new Uint8Array();
+      const job = analyzeVideoClip(bytes, {
+        apiKey: requiredEnvironment("NVIDIA_API_KEY"),
+        prompt: inferencePrompt,
+        signal: controller.signal,
+        baseUrl: Deno.env.get("NVIDIA_BASE_URL")?.trim() || undefined,
+        model: Deno.env.get("NVIDIA_VIDEO_MODEL")?.trim() || undefined,
+      }).then((text) => {
+        send({ type: "analysis", sequence, text });
+      }).catch((error) => {
+        if (!controller.signal.aborted) {
+          send({
+            type: "analysis_error",
+            sequence,
+            code: error instanceof VideoModelError ? error.code : "video_model_request_failed",
+          });
+        }
+      }).finally(() => {
+        if (inference === controller) inference = undefined;
+      });
+      const runtime = globalThis as typeof globalThis & {
+        EdgeRuntime?: { waitUntil(promise: Promise<unknown>): void };
+      };
+      runtime.EdgeRuntime?.waitUntil(job);
+    }
   };
 
   socket.onmessage = (event) => {
+    if (stopping || socket.readyState !== WebSocket.OPEN) return;
     if (pendingMessageCount >= maxPendingVideoMessages) {
       protocolFailure("Too many unacknowledged video stream messages.", 1008);
       return;
@@ -1027,9 +1083,13 @@ async function handleVideoStream(
       });
   };
   socket.onerror = () => {
+    stopping = true;
+    inference?.abort();
     if (socket.readyState === WebSocket.OPEN) socket.close(1011, "Video stream failed.");
   };
   socket.onclose = (event) => {
+    stopping = true;
+    inference?.abort();
     closeCode = event.code;
     if (noticeTimer !== undefined) clearTimeout(noticeTimer);
     if (closeTimer !== undefined) clearTimeout(closeTimer);

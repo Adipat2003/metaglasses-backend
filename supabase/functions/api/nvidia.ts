@@ -9,6 +9,7 @@ interface PollOptions {
   deadlineMilliseconds: number;
   fetcher?: Fetcher;
   pollBaseUrl?: string;
+  signal?: AbortSignal;
 }
 
 export class NvidiaPendingResponseError extends Error {
@@ -53,7 +54,12 @@ export async function resolveNvidiaResponse(
         Accept: "application/json",
         "NVCF-POLL-SECONDS": String(pollSeconds),
       },
-      signal: AbortSignal.timeout(Math.ceil(remainingMilliseconds)),
+      signal: options.signal
+        ? AbortSignal.any([
+          options.signal,
+          AbortSignal.timeout(Math.ceil(remainingMilliseconds)),
+        ])
+        : AbortSignal.timeout(Math.ceil(remainingMilliseconds)),
     });
   }
 

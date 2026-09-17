@@ -193,7 +193,8 @@ docker run --rm --volume "$PWD:/work" --workdir /work \
 docker run --rm --volume "$PWD:/work" --workdir /work \
   denoland/deno:2.5.2 deno test --config supabase/functions/deno.json \
   supabase/functions/api/nvidia_test.ts \
-  supabase/functions/api/video_stream_test.ts
+  supabase/functions/api/video_stream_test.ts \
+  supabase/functions/api/nvidia_video_test.ts
 ```
 
 Verify the primary Edge API:

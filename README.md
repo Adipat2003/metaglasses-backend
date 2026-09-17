@@ -60,8 +60,9 @@ metadata expire with their pairing and are deleted by the scheduled cleanup func
 
 After registering a pairing, connect to the video endpoint with `wss://`, the Supabase access
 token in the `Authorization` header, and the pairing token in the query string. Send a JSON
-`start` control message followed by binary encoded-video chunks. The API acknowledges and then
-discards every chunk. It does not record video or send frames to a model.
+`start` control message followed by binary encoded-video chunks. Transport mode acknowledges and
+discards each chunk. Opt-in `mode: "nvidia"` analyzes complete MP4 clips with Nemotron 3 Nano Omni
+and returns `analysis` messages on the socket. Neither mode records video.
 
 The endpoint requests a reconnect after two minutes so a stream does not depend on one Edge
 Function worker living indefinitely. See [the video stream protocol](docs/supabase.md#ephemeral-video-streams)
@@ -167,7 +168,8 @@ docker run --rm --volume "$PWD:/work" --workdir /work \
 docker run --rm --volume "$PWD:/work" --workdir /work \
   denoland/deno:2.5.2 deno test --config supabase/functions/deno.json \
   supabase/functions/api/nvidia_test.ts \
-  supabase/functions/api/video_stream_test.ts
+  supabase/functions/api/video_stream_test.ts \
+  supabase/functions/api/nvidia_video_test.ts
 ```
 
 ## Documentation

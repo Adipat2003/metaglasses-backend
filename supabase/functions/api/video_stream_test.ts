@@ -20,6 +20,32 @@ Deno.test("parses video stream start metadata", () => {
   assert(message.type === "start", "start message should be returned");
   assert(message.contentType === "video/mp4", "content type should be normalized");
   assert(message.codec === "avc1.42E01E", "codec should be preserved");
+  assert(message.mode === "transport", "existing clients should remain transport-only");
+});
+
+Deno.test("accepts opt-in NVIDIA video clip analysis", () => {
+  const message = parseVideoStreamControl(
+    '{"type":"start","contentType":"video/mp4","mode":"nvidia","prompt":"Describe this."}',
+  );
+  assert(message.type === "start" && message.mode === "nvidia", "analysis mode expected");
+});
+
+Deno.test("rejects non-MP4 inference and blank prompts", () => {
+  for (
+    const fields of [
+      { contentType: "video/webm", mode: "nvidia" },
+      { contentType: "video/mp4", mode: "nvidia", prompt: " " },
+      { contentType: "video/mp4", mode: "unknown" },
+    ]
+  ) {
+    let failed = false;
+    try {
+      parseVideoStreamControl(JSON.stringify({ type: "start", ...fields }));
+    } catch (error) {
+      failed = error instanceof VideoStreamProtocolError;
+    }
+    assert(failed, "invalid inference metadata should fail");
+  }
 });
 
 Deno.test("accepts ping and stop controls", () => {
