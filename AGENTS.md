@@ -12,16 +12,16 @@ Use this map before searching the repository:
 | Cleanup worker | `supabase/functions/cleanup-pairing-images/index.ts` |
 | Local Python reference API | `app/` and `tests/` |
 | Environment templates | `config/env/` |
-| Generated API client artifacts | `scripts/generate-postman-collection.mjs` |
+| Canonical Postman collection and environments | `Adipat2003/metaglasses-postman` |
 | Local setup, deployment, and security | `docs/` |
 
 Trial and production run only the Supabase Edge API. Treat `app/` as a local reference, not a
-deployment target. Never edit an applied migration or hand-edit generated Postman JSON.
+deployment target. Never edit an applied migration. Canonical Postman assets live in the separate
+`Adipat2003/metaglasses-postman` repository and are not duplicated here.
 
 ## Efficient Navigation
 
-Search the smallest relevant area first. Skip `uv.lock` and generated `postman/*.json` unless
-they are directly relevant.
+Search the smallest relevant area first. Skip `uv.lock` unless it is directly relevant.
 
 ```bash
 rg -n 'routePath|Deno.serve' supabase/functions/api
@@ -39,7 +39,6 @@ documentation in the same change.
 - `uv sync --locked --all-groups`: install the Python 3.12 environment.
 - `uv run ruff check .`: lint Python.
 - `uv run python -m pytest`: run Python and repository configuration tests.
-- `node scripts/generate-postman-collection.mjs --check`: verify generated Postman files.
 - `npx --yes supabase@2.116.0 start`: run local Supabase.
 - `bash scripts/smoke-edge-api.sh`: test local Auth, pairing, Storage, and API behavior.
 

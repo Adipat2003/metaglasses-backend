@@ -53,8 +53,9 @@ values into source control, workflow logs, issues, or chat.
 1. Install the locked Python environment.
 2. Run Ruff.
 3. Run Pytest contract and configuration tests.
-4. Verify that generated Postman artifacts match the Edge API routes.
-5. Check Deno formatting, TypeScript types, and NVIDIA polling tests.
+4. Check Deno formatting, TypeScript types, and NVIDIA polling tests.
+
+The separate `Adipat2003/metaglasses-postman` repository validates its own collection artifacts.
 
 CI does not deploy anything.
 
