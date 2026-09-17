@@ -1,0 +1,75 @@
+name: Notify Postman contract sync
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out validated backend revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 2
+
+      - name: Detect Edge API contract source changes
+        id: contract
+        env:
+          BACKEND_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if git diff-tree --no-commit-id --name-only -r "$BACKEND_SHA" -- \
+            supabase/functions/api config/env/edge-functions.env.example | grep -q .; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check GitHub App configuration
+        id: sync
+        if: steps.contract.outputs.changed == 'true'
+        env:
+          POSTMAN_SYNC_APP_ID: ${{ vars.POSTMAN_SYNC_APP_ID }}
+          POSTMAN_SYNC_APP_PRIVATE_KEY: ${{ secrets.POSTMAN_SYNC_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "$POSTMAN_SYNC_APP_ID" ] && [ -n "$POSTMAN_SYNC_APP_PRIVATE_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Configure POSTMAN_SYNC_APP_ID and POSTMAN_SYNC_APP_PRIVATE_KEY before enabling Postman sync PR dispatch."
+          fi
+
+      - name: Create short-lived Postman GitHub App token
+        id: postman-app-token
+        if: steps.sync.outputs.enabled == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.POSTMAN_SYNC_APP_ID }}
+          private-key: ${{ secrets.POSTMAN_SYNC_APP_PRIVATE_KEY }}
+          owner: Adipat2003
+          repositories: metaglasses-postman
+
+      - name: Dispatch canonical Postman sync
+        if: steps.sync.outputs.enabled == 'true'
+        env:
+          DISPATCH_TOKEN: ${{ steps.postman-app-token.outputs.token }}
+          BACKEND_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          payload=$(printf '{"event_type":"backend-contract-changed","client_payload":{"backend_repository":"Adipat2003/metaglasses-backend","backend_sha":"%s","source_run_url":"%s"}}' "$BACKEND_SHA" "$SOURCE_RUN_URL")
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $DISPATCH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/Adipat2003/metaglasses-postman/dispatches \
+            --data "$payload"

@@ -60,6 +60,19 @@ Copy the required template from `config/env/` to the ignored runtime path docume
 database passwords, signing keys, or private URLs. Authentication bypass is valid only with
 `APP_ENV=local`. Hosted environments require HTTPS and explicit CORS origins.
 
+## Cross-repository Postman contract sync
+
+`Adipat2003/metaglasses-postman` is the canonical Postman workspace. After CI succeeds on a
+`main` commit that changes `supabase/functions/api/` or the Edge Function environment contract,
+the backend dispatches that exact commit to the Postman repository through the configured
+Postman-sync GitHub App. Its sync workflow automatically opens or updates a PR there; it never
+pushes Postman changes directly to `main`.
+
+When creating a backend PR that changes routes, HTTP methods, authentication, request or response
+contracts, or Edge Function environment variables, expect a linked Postman contract-sync PR after
+merge. Update the Native Git Postman requests and environments in that PR and merge it only after
+its validation passes.
+
 ## Git and Pull Requests
 
 Never commit directly to `main`. Create a scoped branch, make focused imperative commits, push,
