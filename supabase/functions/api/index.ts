@@ -1,4 +1,13 @@
 import { NvidiaPendingResponseError, resolveNvidiaResponse } from "./nvidia.ts";
+import { analyzeVideoClip, VideoModelError } from "./nvidia_video.ts";
+import {
+  maxPendingVideoMessages,
+  maxVideoChunkBytes,
+  maxVideoSessionMilliseconds,
+  parseVideoStreamControl,
+  videoChunkByteLength,
+  VideoStreamProtocolError,
+} from "./video_stream.ts";
 
 const pairingTtlSeconds = 3600;
 const maxImagesPerPairing = 10;
@@ -99,6 +108,18 @@ function requestEnvironment(): "local" | "trial" | "prod" | "unknown" {
 function normalizedRoute(path: string): string {
   if (/^\/v1\/images\/[^/]+$/.test(path)) return "/v1/images/:imageId";
   return path;
+}
+
+interface VideoStreamLog {
+  event: "video_stream_closed";
+  service: "api";
+  environment: "local" | "trial" | "prod" | "unknown";
+  request_id: string;
+  session_id: string;
+  duration_ms: number;
+  chunk_count: number;
+  byte_count: number;
+  close_code: number;
 }
 
 function redactedErrorText(value: string): string {
@@ -887,6 +908,213 @@ async function handleImageDelete(
   return emptyResponse(204);
 }
 
+async function handleVideoStream(
+  request: Request,
+  url: URL,
+  requestId: string,
+): Promise<Response> {
+  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+    throw new ApiError(
+      426,
+      "This endpoint requires a WebSocket upgrade.",
+      false,
+      "websocket_upgrade_required",
+    );
+  }
+  const user = await authenticate(request);
+  const token = validateToken(url.searchParams.get("pairingToken"));
+  await pairingAccess(token, user.id);
+
+  const { socket, response } = Deno.upgradeWebSocket(request);
+  const sessionId = crypto.randomUUID();
+  const startedAt = performance.now();
+  let started = false;
+  let inferencePrompt: string | undefined;
+  let inference: AbortController | undefined;
+  let stopping = false;
+  let chunkCount = 0;
+  let byteCount = 0;
+  let pendingMessageCount = 0;
+  let closeCode = 1006;
+  let messageQueue = Promise.resolve();
+  let noticeTimer: number | undefined;
+  let closeTimer: number | undefined;
+  let resolveClosed: () => void = () => undefined;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+
+  const send = (payload: Record<string, unknown>): void => {
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+  };
+  const protocolFailure = (message: string, code = 1002): void => {
+    stopping = true;
+    inference?.abort();
+    send({ type: "error", code: "video_stream_protocol_error", message });
+    socket.close(code, message.slice(0, 120));
+  };
+
+  socket.onopen = () => {
+    send({
+      type: "ready",
+      sessionId,
+      maxChunkBytes: maxVideoChunkBytes,
+      maxUnacknowledgedMessages: maxPendingVideoMessages,
+      maxSessionMilliseconds: maxVideoSessionMilliseconds,
+    });
+    noticeTimer = setTimeout(() => {
+      send({ type: "reconnect_required", reason: "session_limit" });
+    }, maxVideoSessionMilliseconds - 5_000);
+    closeTimer = setTimeout(() => {
+      stopping = true;
+      inference?.abort();
+      socket.close(1012, "Reconnect to continue streaming.");
+    }, maxVideoSessionMilliseconds);
+  };
+
+  const processMessage = async (data: unknown): Promise<void> => {
+    if (stopping || socket.readyState !== WebSocket.OPEN) return;
+    if (typeof data === "string") {
+      const control = parseVideoStreamControl(data);
+      if (control.type === "ping") {
+        send({ type: "pong", receivedAt: new Date().toISOString() });
+        return;
+      }
+      if (control.type === "stop") {
+        stopping = true;
+        inference?.abort();
+        send({ type: "stopped", chunkCount, byteCount });
+        socket.close(1000, "Stream stopped by client.");
+        return;
+      }
+      if (started) {
+        throw new VideoStreamProtocolError("The stream has already started.");
+      }
+      if (control.mode === "nvidia") {
+        requiredEnvironment("NVIDIA_API_KEY");
+        inferencePrompt = control.prompt;
+      }
+      started = true;
+      send({
+        type: "started",
+        contentType: control.contentType,
+        mode: control.mode,
+        ...(control.codec ? { codec: control.codec } : {}),
+      });
+      return;
+    }
+
+    if (!started) {
+      throw new VideoStreamProtocolError("Send a start control message before video chunks.");
+    }
+    const byteLength = await videoChunkByteLength(data);
+    if (byteLength === null) {
+      throw new VideoStreamProtocolError("Video chunks must be binary WebSocket messages.");
+    }
+    if (byteLength === 0) {
+      throw new VideoStreamProtocolError("Video chunks must not be empty.");
+    }
+    if (byteLength > maxVideoChunkBytes) {
+      protocolFailure(`Video chunks must not exceed ${maxVideoChunkBytes} bytes.`, 1009);
+      return;
+    }
+    chunkCount += 1;
+    byteCount += byteLength;
+    send({ type: "ack", sequence: chunkCount, byteSize: byteLength, totalBytes: byteCount });
+    if (inferencePrompt !== undefined) {
+      const sequence = chunkCount;
+      if (inference) {
+        send({ type: "dropped", sequence, reason: "model_busy" });
+        return;
+      }
+      const controller = new AbortController();
+      inference = controller;
+      const bytes = data instanceof Blob
+        ? new Uint8Array(await data.arrayBuffer())
+        : data instanceof ArrayBuffer
+        ? new Uint8Array(data)
+        : ArrayBuffer.isView(data)
+        ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+        : new Uint8Array();
+      const job = analyzeVideoClip(bytes, {
+        apiKey: requiredEnvironment("NVIDIA_API_KEY"),
+        prompt: inferencePrompt,
+        signal: controller.signal,
+        baseUrl: Deno.env.get("NVIDIA_BASE_URL")?.trim() || undefined,
+        model: Deno.env.get("NVIDIA_VIDEO_MODEL")?.trim() || undefined,
+      }).then((text) => {
+        send({ type: "analysis", sequence, text });
+      }).catch((error) => {
+        if (!controller.signal.aborted) {
+          send({
+            type: "analysis_error",
+            sequence,
+            code: error instanceof VideoModelError ? error.code : "video_model_request_failed",
+          });
+        }
+      }).finally(() => {
+        if (inference === controller) inference = undefined;
+      });
+      const runtime = globalThis as typeof globalThis & {
+        EdgeRuntime?: { waitUntil(promise: Promise<unknown>): void };
+      };
+      runtime.EdgeRuntime?.waitUntil(job);
+    }
+  };
+
+  socket.onmessage = (event) => {
+    if (stopping || socket.readyState !== WebSocket.OPEN) return;
+    if (pendingMessageCount >= maxPendingVideoMessages) {
+      protocolFailure("Too many unacknowledged video stream messages.", 1008);
+      return;
+    }
+    pendingMessageCount += 1;
+    messageQueue = messageQueue
+      .then(() => processMessage(event.data))
+      .catch((error) => {
+        protocolFailure(
+          error instanceof VideoStreamProtocolError
+            ? error.message
+            : "The video stream message could not be processed.",
+        );
+      })
+      .finally(() => {
+        pendingMessageCount -= 1;
+      });
+  };
+  socket.onerror = () => {
+    stopping = true;
+    inference?.abort();
+    if (socket.readyState === WebSocket.OPEN) socket.close(1011, "Video stream failed.");
+  };
+  socket.onclose = (event) => {
+    stopping = true;
+    inference?.abort();
+    closeCode = event.code;
+    if (noticeTimer !== undefined) clearTimeout(noticeTimer);
+    if (closeTimer !== undefined) clearTimeout(closeTimer);
+    resolveClosed();
+    const log: VideoStreamLog = {
+      event: "video_stream_closed",
+      service: "api",
+      environment: requestEnvironment(),
+      request_id: requestId,
+      session_id: sessionId,
+      duration_ms: Math.round((performance.now() - startedAt) * 100) / 100,
+      chunk_count: chunkCount,
+      byte_count: byteCount,
+      close_code: closeCode,
+    };
+    console.info(JSON.stringify(log));
+  };
+
+  const runtime = globalThis as typeof globalThis & {
+    EdgeRuntime?: { waitUntil(promise: Promise<unknown>): void };
+  };
+  runtime.EdgeRuntime?.waitUntil(closed);
+  return response;
+}
+
 function routePath(pathname: string): string {
   const functionPrefix = "/functions/v1/api";
   if (pathname.startsWith(functionPrefix)) {
@@ -923,6 +1151,8 @@ Deno.serve(async (request: Request) => {
       response = await handleChat(request);
     } else if (request.method === "POST" && path === "/v1/images") {
       response = await handleImageUpload(request, url);
+    } else if (request.method === "GET" && path === "/v1/video-stream") {
+      response = await handleVideoStream(request, url, requestId);
     } else {
       const imageDelete = path.match(/^\/v1\/images\/([^/]+)$/);
       if (request.method === "DELETE" && imageDelete) {
@@ -939,5 +1169,5 @@ Deno.serve(async (request: Request) => {
   }
 
   requestLog(request, path, requestId, response.status, startedAt, requestError);
-  return responseWithRequestId(response, requestId);
+  return response.status === 101 ? response : responseWithRequestId(response, requestId);
 });
