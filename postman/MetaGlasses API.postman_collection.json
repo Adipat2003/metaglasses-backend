@@ -167,7 +167,7 @@
     },
     {
       "name": "Supabase Edge API smoke flow",
-      "description": "Run in order: health, state, upload, chat, display, then delete.",
+      "description": "Run in order: health, state, video upgrade probe, upload, chat, display, then delete.",
       "item": [
         {
           "name": "Health check",
@@ -229,6 +229,32 @@
             },
             "url": "{{backend_url}}/v1/state",
             "description": "Run this before image upload or chat to register the pairing."
+          }
+        },
+        {
+          "name": "Check video WebSocket upgrade requirement",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('A WebSocket upgrade is required', () => pm.response.to.have.status(426));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{backend_url}}/v1/video-stream?pairingToken={{pairing_token}}",
+            "description": "This HTTP probe verifies the route. Connect with wss:// and stream binary chunks as documented in docs/supabase.md."
           }
         },
         {

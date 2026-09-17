@@ -127,6 +127,16 @@ const apiRequests = {
       description: "Select a JPEG file in Body. For PNG, change Content-Type to image/png.",
     },
   ),
+  "GET /v1/video-stream": request(
+    "Check video WebSocket upgrade requirement",
+    "GET",
+    "{{backend_url}}/v1/video-stream?pairingToken={{pairing_token}}",
+    {
+      headers: [authHeader],
+      tests: ["pm.test('A WebSocket upgrade is required', () => pm.response.to.have.status(426));"],
+      description: "This HTTP probe verifies the route. Connect with wss:// and stream binary chunks as documented in docs/supabase.md.",
+    },
+  ),
   "DELETE /v1/images/:image_id": request(
     "Delete uploaded pairing image",
     "DELETE",
@@ -224,10 +234,11 @@ function collection() {
       { name: "Supabase Auth", item: authRequests() },
       {
         name: "Supabase Edge API smoke flow",
-        description: "Run in order: health, state, upload, chat, display, then delete.",
+        description: "Run in order: health, state, video upgrade probe, upload, chat, display, then delete.",
         item: [
           apiRequests["GET /healthz"],
           apiRequests["POST /v1/state"],
+          apiRequests["GET /v1/video-stream"],
           apiRequests["POST /v1/images"],
           apiRequests["POST /v1/chat"],
           apiRequests["GET /v1/display"],

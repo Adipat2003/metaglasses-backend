@@ -153,6 +153,67 @@ Storage policies require all of the following:
 The Edge API passes a signed URL to NVIDIA only during the model request. The URL lasts 10
 minutes, while the underlying object remains bound to the pairing expiry.
 
+## Ephemeral video streams
+
+`GET /v1/video-stream` upgrades an authenticated request to a pairing-scoped WebSocket. It is a
+transport boundary only: received video bytes are acknowledged and discarded without Storage,
+database, or model writes.
+
+Connect with the current Supabase access token and an active pairing:
+
+```http
+GET /functions/v1/api/v1/video-stream?pairingToken=<PAIRING_TOKEN>
+Authorization: Bearer <SUPABASE_ACCESS_TOKEN>
+Connection: Upgrade
+Upgrade: websocket
+```
+
+Use `wss://` for hosted trial and production connections. After the server sends `ready`, send
+stream metadata as a text message:
+
+```json
+{
+  "type": "start",
+  "contentType": "video/mp4",
+  "codec": "avc1.42E01E"
+}
+```
+
+Then send encoded media as binary WebSocket messages. Chunks can contain any video container or
+codec declared by the client because the transport does not decode them. Each chunk must be no
+larger than 1 MiB. The server replies after accepting each chunk:
+
+```json
+{
+  "type": "ack",
+  "sequence": 1,
+  "byteSize": 65536,
+  "totalBytes": 65536
+}
+```
+
+Keep no more than eight unacknowledged messages client-side. Pause the encoder or drop the oldest
+unsent chunk when acknowledgements fall behind. The server closes an overproducing connection with
+code `1008`. Text control messages are:
+
+- `{"type":"ping"}`: the server replies with `pong`.
+- `{"type":"stop"}`: the server reports final counters and closes normally.
+
+The server sends `reconnect_required` five seconds before the two-minute session limit, then
+closes with WebSocket code `1012`. Open a new authenticated connection and continue with a fresh
+`start` message. This planned reconnect keeps sessions below hosted Edge Function lifetime and
+idle limits. An invalid message closes with `1002`; a chunk larger than 1 MiB closes with `1009`.
+
+The endpoint logs only session identifiers, timing, counters, and close codes. It does not log or
+retain video payloads. A future media processor can consume chunks inside the acknowledged
+message boundary without changing the client protocol.
+
+The current authentication header works with native mobile WebSocket clients. Browser WebSocket
+clients cannot set an `Authorization` header, so a browser client would require a separate
+short-lived stream-ticket endpoint before it could use this transport safely.
+
+## Temporary image cleanup
+
 The `cleanup-pairing-images` Edge Function:
 
 1. Confirms the configured `Images` or `images` bucket exists.

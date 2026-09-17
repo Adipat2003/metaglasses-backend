@@ -19,6 +19,7 @@ Append the existing route to the environment base URL:
 - `POST /v1/chat`
 - `POST /v1/images`
 - `DELETE /v1/images/{image_id}`
+- `GET /v1/video-stream` (WebSocket upgrade)
 
 Phone routes require a Supabase user access token in `Authorization: Bearer <token>`. The
 lens display route uses the random pairing token as its capability credential. The Edge API
@@ -54,6 +55,17 @@ Attach the returned `imageId` to a user chat message:
 
 The Edge Function creates a 10-minute signed Storage URL for the NVIDIA request. Images and
 metadata expire with their pairing and are deleted by the scheduled cleanup function.
+
+## Ephemeral video streaming
+
+After registering a pairing, connect to the video endpoint with `wss://`, the Supabase access
+token in the `Authorization` header, and the pairing token in the query string. Send a JSON
+`start` control message followed by binary encoded-video chunks. The API acknowledges and then
+discards every chunk. It does not record video or send frames to a model.
+
+The endpoint requests a reconnect after two minutes so a stream does not depend on one Edge
+Function worker living indefinitely. See [the video stream protocol](docs/supabase.md#ephemeral-video-streams)
+for message formats, limits, and reconnect behavior.
 
 ## Postman
 
@@ -154,7 +166,8 @@ docker run --rm --volume "$PWD:/work" --workdir /work \
   supabase/functions/cleanup-pairing-images/index.ts
 docker run --rm --volume "$PWD:/work" --workdir /work \
   denoland/deno:2.5.2 deno test --config supabase/functions/deno.json \
-  supabase/functions/api/nvidia_test.ts
+  supabase/functions/api/nvidia_test.ts \
+  supabase/functions/api/video_stream_test.ts
 ```
 
 ## Documentation
