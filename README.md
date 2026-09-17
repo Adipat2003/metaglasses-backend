@@ -57,19 +57,13 @@ metadata expire with their pairing and are deleted by the scheduled cleanup func
 
 ## Postman
 
-Import the generated collection and the trial or production example environment from
-[`postman/`](postman/). The environments use the matching Supabase project for both Auth and
-Edge API requests. Duplicate the selected environment inside Postman before adding the project
-publishable key or test-user credentials.
+The canonical MetaGlasses Postman collection and environments live in the separate
+[`Adipat2003/metaglasses-postman`](https://github.com/Adipat2003/metaglasses-postman) repository.
+Use that repository to import the collection and duplicate the selected environment before adding
+a project publishable key or test-user credentials. Do not commit populated environments here.
 
-Regenerate the collection after changing the Edge API routes:
-
-```bash
-node scripts/generate-postman-collection.mjs
-```
-
-CI runs the generator in check mode. It fails when an Edge API endpoint has no Postman request
-template or when the generated files are stale.
+When an Edge API contract changes, update the canonical Postman repository in the same delivery
+cycle. This backend intentionally does not carry generated Postman exports or environments.
 
 ## Local Supabase development
 
@@ -107,7 +101,7 @@ database, and Python reference API instructions.
 ## CI and deployment
 
 CI validates the Python reference implementation, TypeScript Edge Functions, database
-configuration, tests, and generated Postman artifacts.
+configuration, and tests. The Postman repository validates its own collection artifacts.
 
 After successful CI on `main`, CD automatically applies migrations and deploys functions to
 the trial Supabase project. Production is never deployed by a normal push. Run the `CD`
