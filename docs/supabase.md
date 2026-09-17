@@ -140,6 +140,109 @@ Storage policies require all of the following:
 The Edge API passes a signed URL to NVIDIA only during the model request. The URL lasts 10
 minutes, while the underlying object remains bound to the pairing expiry.
 
+## Ephemeral video streams
+
+`GET /v1/video-stream` upgrades an authenticated request to a pairing-scoped WebSocket. It is a
+transport-only by default: received video bytes are acknowledged and discarded without Storage,
+database, or model writes. Clients can explicitly enable NVIDIA inference as described below.
+
+Connect with the current Supabase access token and an active pairing:
+
+```http
+GET /functions/v1/api/v1/video-stream?pairingToken=<PAIRING_TOKEN>
+Authorization: Bearer <SUPABASE_ACCESS_TOKEN>
+Connection: Upgrade
+Upgrade: websocket
+```
+
+Use `wss://` for hosted trial and production connections. After the server sends `ready`, send
+stream metadata as a text message:
+
+```json
+{
+  "type": "start",
+  "contentType": "video/mp4",
+  "codec": "avc1.42E01E"
+}
+```
+
+Then send encoded media as binary WebSocket messages. Chunks can contain any video container or
+codec declared by the client because the transport does not decode them. Each chunk must be no
+larger than 1 MiB. The server replies after accepting each chunk:
+
+```json
+{
+  "type": "ack",
+  "sequence": 1,
+  "byteSize": 65536,
+  "totalBytes": 65536
+}
+```
+
+Keep no more than eight unacknowledged messages client-side. Pause the encoder or drop the oldest
+unsent chunk when acknowledgements fall behind. The server closes an overproducing connection with
+code `1008`. Text control messages are:
+
+- `{"type":"ping"}`: the server replies with `pong`.
+- `{"type":"stop"}`: the server reports final counters and closes normally.
+
+The server sends `reconnect_required` five seconds before the two-minute session limit, then
+closes with WebSocket code `1012`. Open a new authenticated connection and continue with a fresh
+`start` message. This planned reconnect keeps sessions below hosted Edge Function lifetime and
+idle limits. An invalid message closes with `1002`; a chunk larger than 1 MiB closes with `1009`.
+
+The endpoint logs only session identifiers, timing, counters, and close codes. It does not log or
+retain video payloads. A future media processor can consume chunks inside the acknowledged
+message boundary without changing the client protocol.
+
+The current authentication header works with native mobile WebSocket clients. Browser WebSocket
+clients cannot set an `Authorization` header, so a browser client would require a separate
+short-lived stream-ticket endpoint before it could use this transport safely.
+
+### NVIDIA video analysis (initial implementation)
+
+Enable inference in the initial start message:
+
+```json
+{"type":"start","contentType":"video/mp4","mode":"nvidia","prompt":"Describe the visible actions in one short sentence."}
+```
+
+Each binary message must contain one complete, independently decodable, non-fragmented MP4 file
+with `ftyp`, `moov`, and `mdat` boxes, still within the 1 MiB transport limit. The client must
+finalize a fresh short MP4 window before sending it. Recommended initial windows are 2 to 5
+seconds at a low bitrate. Arbitrary MediaRecorder timeslices and raw H.264 packets are not complete
+MP4 files and cannot be analyzed by this mode. The backend checks container structure but does not
+decode video or verify duration; the client must keep clips under NVIDIA's two-minute input limit.
+
+The backend sends an inline `data:video/mp4;base64,...` `video_url` to chat completions. It uses
+`NVIDIA_API_KEY`, the existing `NVIDIA_BASE_URL`, and the separate optional `NVIDIA_VIDEO_MODEL`
+(default `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`). The chat model remains unchanged.
+
+Only one clip per socket is inferred at a time. Subsequent clips are acknowledged as received,
+then discarded with `{"type":"dropped","sequence":2,"reason":"model_busy"}`. Wait for an
+`analysis` or `analysis_error` event before sending the next inference clip. Heartbeat and stop
+controls remain responsive while the model request is pending.
+
+```json
+{"type":"analysis","sequence":1,"text":"A person places a cup on the table."}
+```
+
+Errors use `analysis_error` with the matching sequence and a safe code, such as
+`video_clip_invalid`, `video_clip_fragmented`, `video_model_rate_limited`, or
+`video_model_request_failed`. Model requests have a 60-second deadline and are cancelled when
+the client stops, disconnects, or reaches the session limit. Video and responses are not stored
+in Storage or the database, and payloads are never logged by this API. NVIDIA receives and
+processes the clip, so its service data-handling terms still apply.
+
+This is near-live inference on finite clips, not native continuous model input. Inline video
+compatibility and latency against NVIDIA's hosted trial must be verified with real camera clips
+before production use; mocked tests do not establish hosted media acceptance.
+
+References: [NVIDIA video input format](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-nano-omni-30b-a3b-reasoning),
+[NVIDIA chat-completions schema](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-nano-omni-30b-a3b-reasoning-infer).
+
+## Temporary image cleanup
+
 The `cleanup-pairing-images` Edge Function:
 
 1. Confirms the configured `Images` or `images` bucket exists.

@@ -192,7 +192,9 @@ docker run --rm --volume "$PWD:/work" --workdir /work \
   supabase/functions/cleanup-pairing-images/index.ts
 docker run --rm --volume "$PWD:/work" --workdir /work \
   denoland/deno:2.5.2 deno test --config supabase/functions/deno.json \
-  supabase/functions/api/nvidia_test.ts
+  supabase/functions/api/nvidia_test.ts \
+  supabase/functions/api/video_stream_test.ts \
+  supabase/functions/api/nvidia_video_test.ts
 ```
 
 Verify the primary Edge API:
@@ -213,8 +215,8 @@ Both health responses should report `local` and `required` for authenticated ful
 setups.
 
 For an authenticated smoke test, sign up through local Supabase, obtain an access token,
-register a pairing with `/v1/state`, upload a small JPEG or PNG, and send the returned
-`imageId` to `/v1/chat`.
+register a pairing with `/v1/state`, then exercise image or video-stream operations. The video
+WebSocket protocol is documented in [supabase.md](supabase.md#ephemeral-video-streams).
 
 The repository automates Auth, state, display, image upload, deletion, unauthorized access,
 and CORS checks:
