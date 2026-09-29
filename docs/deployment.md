@@ -23,8 +23,9 @@ Add this secret under **Edge Functions > Secrets** in both projects:
 | `NVIDIA_API_KEY` | Trial or shared server credential | Production or shared server credential |
 
 `NVIDIA_MODEL` and `NVIDIA_BASE_URL` are optional overrides. Defaults are
-`meta/llama-3.2-11b-vision-instruct` and `https://integrate.api.nvidia.com/v1`.
-Chat requests use low reasoning effort and allow NVIDIA up to five minutes to respond. Supabase
+`meta/llama-3.2-90b-vision-instruct` and `https://integrate.api.nvidia.com/v1`.
+The API forwards only client-supplied conversation messages and adds no system prompt or other
+model context. Chat requests allow NVIDIA up to five minutes to respond. Supabase
 can still terminate a synchronous request after its 150-second request idle timeout, before the
 application timeout expires. Pending NVIDIA responses are polled using their `NVCF-REQID`, and
 signed image URLs remain valid for 10 minutes so queued inference can retrieve them.

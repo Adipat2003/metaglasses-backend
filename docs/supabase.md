@@ -411,4 +411,4 @@ environment, OAuth, and local Python reference API instructions are in
 - [Supabase Edge Functions](https://supabase.com/docs/guides/functions)
 - [Edge Function secrets](https://supabase.com/docs/guides/functions/secrets)
 - [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started)
-- [NVIDIA Llama 3.2 11B Vision endpoint](https://docs.api.nvidia.com/nim/reference/meta-llama-3_2-11b-vision-instruct-infer)
+- [NVIDIA Llama 3.2 90B Vision endpoint](https://docs.api.nvidia.com/nim/reference/meta-llama-3_2-90b-vision-instruct-infer)
