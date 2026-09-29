@@ -23,7 +23,7 @@ Add this secret under **Edge Functions > Secrets** in both projects:
 | `NVIDIA_API_KEY` | Trial or shared server credential | Production or shared server credential |
 
 `NVIDIA_MODEL` and `NVIDIA_BASE_URL` are optional overrides. Defaults are
-`moonshotai/kimi-k3` and `https://integrate.api.nvidia.com/v1`.
+`meta/llama-3.2-11b-vision-instruct` and `https://integrate.api.nvidia.com/v1`.
 Chat requests use low reasoning effort and allow NVIDIA up to five minutes to respond. Supabase
 can still terminate a synchronous request after its 150-second request idle timeout, before the
 application timeout expires. Pending NVIDIA responses are polled using their `NVCF-REQID`, and

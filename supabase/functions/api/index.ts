@@ -15,7 +15,7 @@ const maxImageBytes = 8 * 1024 * 1024;
 const signedUrlTtlSeconds = 10 * 60;
 const maxTranscriptBytes = 256_000;
 const defaultNvidiaBaseUrl = "https://integrate.api.nvidia.com/v1";
-const defaultNvidiaModel = "moonshotai/kimi-k3";
+const defaultNvidiaModel = "meta/llama-3.2-11b-vision-instruct";
 const nvidiaRequestTimeoutMilliseconds = 5 * 60_000;
 const systemPrompt = `You are the MetaGlasses step-by-step voice assistant.
 Answer the user's latest request with exactly one practical next step in one short,
