@@ -1,7 +1,7 @@
 import {
   NvidiaPendingResponseError,
   resolveNvidiaResponse,
-  resolveNvidiaResponseWithFallback,
+  resolveNvidiaResponseWithFallbacks,
 } from "./nvidia.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -77,47 +77,46 @@ Deno.test("rejects pending NVIDIA responses without a valid request ID", async (
   assert(error.context.upstream_status === 202, "the pending status should be preserved");
 });
 
-Deno.test("uses the fallback model after a provider-side server error", async () => {
-  let fallbackCalls = 0;
-  const resolved = await resolveNvidiaResponseWithFallback(
+Deno.test("uses fallback models after model-not-found and server errors", async () => {
+  const fallbackStatuses = [404, 200];
+  const resolved = await resolveNvidiaResponseWithFallbacks(
     new Response(null, { status: 500 }),
     {
       apiKey: "test-key",
       deadlineMilliseconds: Date.now() + 10_000,
-      fallback: () => {
-        fallbackCalls += 1;
-        return Promise.resolve(
-          new Response('{"choices":[{"message":{"content":"A bicycle."}}]}', {
-            status: 200,
-          }),
-        );
-      },
+      fallbacks: fallbackStatuses.map((status) => () =>
+        Promise.resolve(
+          new Response(status === 200 ? '{"choices":[]}' : null, { status }),
+        )
+      ),
     },
   );
 
-  assert(resolved.response.status === 200, "the fallback response should be returned");
-  assert(resolved.primaryStatus === 500, "the primary failure should be retained");
-  assert(resolved.usedFallback, "the result should identify fallback use");
-  assert(fallbackCalls === 1, "the fallback should be requested once");
+  assert(resolved.response.status === 200, "the final fallback response should be returned");
+  assert(resolved.fallbackCount === 2, "both fallbacks should be requested");
+  assert(
+    resolved.priorStatuses.join(",") === "500,404",
+    "the failed provider statuses should be retained",
+  );
 });
 
 Deno.test("does not use the fallback model for client and rate-limit errors", async () => {
-  for (const status of [400, 401, 404, 429]) {
+  for (const status of [400, 401, 403, 429]) {
     let fallbackCalls = 0;
-    const resolved = await resolveNvidiaResponseWithFallback(
+    const resolved = await resolveNvidiaResponseWithFallbacks(
       new Response(null, { status }),
       {
         apiKey: "test-key",
         deadlineMilliseconds: Date.now() + 10_000,
-        fallback: () => {
+        fallbacks: [() => {
           fallbackCalls += 1;
           return Promise.resolve(new Response(null, { status: 200 }));
-        },
+        }],
       },
     );
 
     assert(resolved.response.status === status, `${status} should be returned unchanged`);
-    assert(!resolved.usedFallback, `${status} should not use the fallback`);
+    assert(resolved.fallbackCount === 0, `${status} should not use the fallback`);
     assert(fallbackCalls === 0, `${status} should not request the fallback`);
   }
 });
