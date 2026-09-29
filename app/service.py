@@ -13,7 +13,7 @@ plain-text sentence. Keep the answer concise enough to fit on a small wearable l
 Do not use markdown, preambles, or follow-up questions unless essential for safety."""
 
 DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-DEFAULT_NVIDIA_MODEL = "moonshotai/kimi-k3"
+DEFAULT_NVIDIA_MODEL = "meta/llama-3.2-11b-vision-instruct"
 
 
 class RateLimitedError(Exception):

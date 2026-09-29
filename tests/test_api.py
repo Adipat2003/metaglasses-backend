@@ -344,7 +344,7 @@ def test_rate_limit_and_provider_errors_are_mapped_to_contract_statuses() -> Non
     assert unavailable.post("/v1/chat", json=payload).status_code == 503
 
 
-def test_nvidia_service_uses_kimi_chat_completions(monkeypatch) -> None:
+def test_nvidia_service_uses_default_multimodal_chat_model(monkeypatch) -> None:
     captured_request: httpx.Request | None = None
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -374,7 +374,7 @@ def test_nvidia_service_uses_kimi_chat_completions(monkeypatch) -> None:
     assert captured_request.url == "https://integrate.api.nvidia.com/v1/chat/completions"
     assert captured_request.headers["authorization"] == "Bearer test-key"
     payload = json.loads(captured_request.content)
-    assert payload["model"] == "moonshotai/kimi-k3"
+    assert payload["model"] == "meta/llama-3.2-11b-vision-instruct"
     assert payload["messages"][-1] == {"role": "user", "content": "help"}
     assert payload["stream"] is False
 
