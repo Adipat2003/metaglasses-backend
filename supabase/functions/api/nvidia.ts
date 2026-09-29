@@ -13,13 +13,13 @@ interface PollOptions {
 }
 
 interface FallbackOptions extends PollOptions {
-  fallback?: () => Promise<Response>;
+  fallbacks?: Array<() => Promise<Response>>;
 }
 
 export interface NvidiaFallbackResult {
+  fallbackCount: number;
+  priorStatuses: number[];
   response: Response;
-  primaryStatus?: number;
-  usedFallback: boolean;
 }
 
 export class NvidiaPendingResponseError extends Error {
@@ -76,19 +76,26 @@ export async function resolveNvidiaResponse(
   return response;
 }
 
-export async function resolveNvidiaResponseWithFallback(
+function shouldTryFallback(status: number): boolean {
+  return status === 404 || status >= 500;
+}
+
+export async function resolveNvidiaResponseWithFallbacks(
   initialResponse: Response,
   options: FallbackOptions,
 ): Promise<NvidiaFallbackResult> {
-  const primary = await resolveNvidiaResponse(initialResponse, options);
-  if (primary.status < 500 || primary.status > 599 || !options.fallback) {
-    return { response: primary, usedFallback: false };
+  let response = await resolveNvidiaResponse(initialResponse, options);
+  const priorStatuses: number[] = [];
+
+  for (const fallback of options.fallbacks ?? []) {
+    if (!shouldTryFallback(response.status)) break;
+    priorStatuses.push(response.status);
+    response = await resolveNvidiaResponse(await fallback(), options);
   }
 
-  const fallback = await resolveNvidiaResponse(await options.fallback(), options);
   return {
-    response: fallback,
-    primaryStatus: primary.status,
-    usedFallback: true,
+    fallbackCount: priorStatuses.length,
+    priorStatuses,
+    response,
   };
 }

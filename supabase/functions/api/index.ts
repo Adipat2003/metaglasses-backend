@@ -1,4 +1,4 @@
-import { NvidiaPendingResponseError, resolveNvidiaResponseWithFallback } from "./nvidia.ts";
+import { NvidiaPendingResponseError, resolveNvidiaResponseWithFallbacks } from "./nvidia.ts";
 import { analyzeVideoClip, VideoModelError } from "./nvidia_video.ts";
 import {
   maxPendingVideoMessages,
@@ -16,6 +16,7 @@ const maxTranscriptBytes = 256_000;
 const defaultNvidiaBaseUrl = "https://integrate.api.nvidia.com/v1";
 const defaultNvidiaModel = "meta/llama-3.2-90b-vision-instruct";
 const defaultNvidiaFallbackModel = "meta/llama-3.2-11b-vision-instruct";
+const finalNvidiaFallbackModel = "moonshotai/kimi-k3";
 const nvidiaRequestTimeoutMilliseconds = 5 * 60_000;
 
 const corsHeaders: Record<string, string> = {
@@ -586,13 +587,11 @@ async function generateResponse(
   const baseUrl = (Deno.env.get("NVIDIA_BASE_URL") ?? defaultNvidiaBaseUrl)
     .replace(/\/$/, "");
   const model = Deno.env.get("NVIDIA_MODEL")?.trim() || defaultNvidiaModel;
-  const fallbackModel = defaultNvidiaFallbackModel === model
-    ? undefined
-    : defaultNvidiaFallbackModel;
+  const models = [...new Set([model, defaultNvidiaFallbackModel, finalNvidiaFallbackModel])];
   const deadlineMilliseconds = Date.now() + nvidiaRequestTimeoutMilliseconds;
   let response: Response;
   let providerModel = model;
-  let primaryUpstreamStatus: number | undefined;
+  let priorUpstreamStatuses: number[] = [];
   const requestModel = (requestedModel: string): Promise<Response> => {
     const remainingMilliseconds = deadlineMilliseconds - Date.now();
     if (remainingMilliseconds <= 0) {
@@ -616,14 +615,14 @@ async function generateResponse(
     });
   };
   try {
-    const result = await resolveNvidiaResponseWithFallback(await requestModel(model), {
+    const result = await resolveNvidiaResponseWithFallbacks(await requestModel(models[0]), {
       apiKey,
       deadlineMilliseconds,
-      fallback: fallbackModel ? () => requestModel(fallbackModel) : undefined,
+      fallbacks: models.slice(1).map((fallbackModel) => () => requestModel(fallbackModel)),
     });
     response = result.response;
-    if (result.usedFallback && fallbackModel) providerModel = fallbackModel;
-    primaryUpstreamStatus = result.primaryStatus;
+    providerModel = models[result.fallbackCount];
+    priorUpstreamStatuses = result.priorStatuses;
   } catch (error) {
     if (error instanceof NvidiaPendingResponseError) {
       throw new ApiError(503, "Model provider unavailable.", false, error.code, error.context);
@@ -644,8 +643,8 @@ async function generateResponse(
   if (!response.ok) {
     const context = await providerFailureContext(response);
     context.provider_model = providerModel;
-    if (primaryUpstreamStatus !== undefined) {
-      context.primary_upstream_status = primaryUpstreamStatus;
+    if (priorUpstreamStatuses.length > 0) {
+      context.prior_upstream_statuses = priorUpstreamStatuses.join(",");
     }
     throw new ApiError(
       503,
