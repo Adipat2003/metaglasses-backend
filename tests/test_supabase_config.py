@@ -72,6 +72,23 @@ def test_edge_api_database_functions_are_service_role_only() -> None:
     assert migration.count("from public, anon, authenticated") == len(function_names)
 
 
+def test_hosted_edge_api_does_not_limit_images_per_pairing() -> None:
+    source = (ROOT / "supabase" / "functions" / "api" / "index.ts").read_text(
+        encoding="utf-8"
+    )
+    migration = (
+        ROOT
+        / "supabase"
+        / "migrations"
+        / "20260929030609_remove_pairing_image_limit.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "maxImagesPerPairing" not in source
+    assert "p_max_images: null" in source
+    assert "active_image_count" not in migration
+    assert "return 'registered';" in migration
+
+
 def test_cd_deploys_supabase_trial_automatically_and_production_manually() -> None:
     workflow = (ROOT / ".github" / "workflows" / "cd.yml").read_text(encoding="utf-8")
 

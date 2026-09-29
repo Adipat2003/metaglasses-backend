@@ -10,7 +10,6 @@ import {
 } from "./video_stream.ts";
 
 const pairingTtlSeconds = 3600;
-const maxImagesPerPairing = 10;
 const maxImageBytes = 8 * 1024 * 1024;
 const signedUrlTtlSeconds = 10 * 60;
 const maxTranscriptBytes = 256_000;
@@ -713,13 +712,6 @@ async function handleChat(request: Request): Promise<Response> {
   const imageIds = [
     ...new Set(messages.flatMap((message) => message.imageIds)),
   ];
-  if (imageIds.length > maxImagesPerPairing) {
-    await setState(token, user.id, "idle");
-    throw new ApiError(
-      422,
-      "Too many images are attached to this chat request.",
-    );
-  }
 
   try {
     const images = await getImages(token, user.id, imageIds);
@@ -812,9 +804,7 @@ async function handleImageUpload(
   const imageId = crypto.randomUUID();
   const digest = await tokenHash(token);
   const objectPath = `${user.id}/${digest}/${imageId}.${extension}`;
-  const registration = await rpc<
-    "registered" | "limit" | "forbidden" | "not_found"
-  >(
+  const registration = await rpc<"registered" | "forbidden" | "not_found">(
     "edge_api_register_image",
     {
       p_token_hash: digest,
@@ -823,15 +813,10 @@ async function handleImageUpload(
       p_object_path: objectPath,
       p_content_type: contentType,
       p_byte_size: bytes.length,
-      p_max_images: maxImagesPerPairing,
+      // Retained as null for compatibility with the existing RPC signature.
+      p_max_images: null,
     },
   );
-  if (registration === "limit") {
-    throw new ApiError(
-      429,
-      "This pairing already contains the maximum number of images.",
-    );
-  }
   if (registration === "forbidden") {
     throw new ApiError(403, "This pairing token belongs to another user.");
   }
