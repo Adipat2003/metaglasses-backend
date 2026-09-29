@@ -54,7 +54,9 @@ Attach the returned `imageId` to a user chat message:
 ```
 
 The Edge Function creates a 10-minute signed Storage URL for the NVIDIA request. Images and
-metadata expire with their pairing and are deleted by the scheduled cleanup function.
+metadata expire with their pairing and are deleted by the scheduled cleanup function. The hosted
+API does not impose a fixed number of images per pairing, although each image must still satisfy
+the file size and content-type validation.
 
 ## Ephemeral video streaming
 
