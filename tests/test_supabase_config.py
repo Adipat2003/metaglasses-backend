@@ -47,6 +47,8 @@ def test_edge_api_uses_explicit_authentication_and_permissive_cors() -> None:
     assert 'fetch(`${supabaseUrl()}/auth/v1/user`' in source
     assert 'requiredEnvironment("NVIDIA_API_KEY")' in source
     assert "SUPABASE_SERVICE_ROLE_KEY" in source
+    assert 'role: "system"' not in source
+    assert "systemPrompt" not in source
 
 
 def test_edge_api_database_functions_are_service_role_only() -> None:

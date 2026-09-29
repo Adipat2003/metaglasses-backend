@@ -7,13 +7,8 @@ import httpx
 
 from app.models import ConversationMessage
 
-SYSTEM_PROMPT = """You are the MetaGlasses step-by-step voice assistant.
-Answer the user's latest request with exactly one practical next step in one short,
-plain-text sentence. Keep the answer concise enough to fit on a small wearable lens.
-Do not use markdown, preambles, or follow-up questions unless essential for safety."""
-
 DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-DEFAULT_NVIDIA_MODEL = "meta/llama-3.2-11b-vision-instruct"
+DEFAULT_NVIDIA_MODEL = "meta/llama-3.2-90b-vision-instruct"
 
 
 class RateLimitedError(Exception):
@@ -49,8 +44,7 @@ class NvidiaChatService:
         request = {
             "model": os.getenv("NVIDIA_MODEL", DEFAULT_NVIDIA_MODEL),
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                *[_model_message(message, image_urls or {}) for message in messages],
+                _model_message(message, image_urls or {}) for message in messages
             ],
             "max_tokens": 160,
             "stream": False,

@@ -374,8 +374,8 @@ def test_nvidia_service_uses_default_multimodal_chat_model(monkeypatch) -> None:
     assert captured_request.url == "https://integrate.api.nvidia.com/v1/chat/completions"
     assert captured_request.headers["authorization"] == "Bearer test-key"
     payload = json.loads(captured_request.content)
-    assert payload["model"] == "meta/llama-3.2-11b-vision-instruct"
-    assert payload["messages"][-1] == {"role": "user", "content": "help"}
+    assert payload["model"] == "meta/llama-3.2-90b-vision-instruct"
+    assert payload["messages"] == [{"role": "user", "content": "help"}]
     assert payload["stream"] is False
 
 
