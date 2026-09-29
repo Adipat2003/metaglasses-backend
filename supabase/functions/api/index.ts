@@ -1,4 +1,4 @@
-import { NvidiaPendingResponseError, resolveNvidiaResponse } from "./nvidia.ts";
+import { NvidiaPendingResponseError, resolveNvidiaResponseWithFallback } from "./nvidia.ts";
 import { analyzeVideoClip, VideoModelError } from "./nvidia_video.ts";
 import {
   maxPendingVideoMessages,
@@ -15,6 +15,7 @@ const signedUrlTtlSeconds = 10 * 60;
 const maxTranscriptBytes = 256_000;
 const defaultNvidiaBaseUrl = "https://integrate.api.nvidia.com/v1";
 const defaultNvidiaModel = "meta/llama-3.2-90b-vision-instruct";
+const defaultNvidiaFallbackModel = "meta/llama-3.2-11b-vision-instruct";
 const nvidiaRequestTimeoutMilliseconds = 5 * 60_000;
 
 const corsHeaders: Record<string, string> = {
@@ -585,10 +586,19 @@ async function generateResponse(
   const baseUrl = (Deno.env.get("NVIDIA_BASE_URL") ?? defaultNvidiaBaseUrl)
     .replace(/\/$/, "");
   const model = Deno.env.get("NVIDIA_MODEL")?.trim() || defaultNvidiaModel;
+  const fallbackModel = defaultNvidiaFallbackModel === model
+    ? undefined
+    : defaultNvidiaFallbackModel;
   const deadlineMilliseconds = Date.now() + nvidiaRequestTimeoutMilliseconds;
   let response: Response;
-  try {
-    response = await fetch(`${baseUrl}/chat/completions`, {
+  let providerModel = model;
+  let primaryUpstreamStatus: number | undefined;
+  const requestModel = (requestedModel: string): Promise<Response> => {
+    const remainingMilliseconds = deadlineMilliseconds - Date.now();
+    if (remainingMilliseconds <= 0) {
+      throw new DOMException("NVIDIA request deadline exceeded.", "TimeoutError");
+    }
+    return fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -596,18 +606,24 @@ async function generateResponse(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model,
+        model: requestedModel,
         messages: messages.map((message) => modelMessage(message, imageUrls)),
         max_tokens: 160,
         stream: false,
         temperature: 0.2,
       }),
-      signal: AbortSignal.timeout(nvidiaRequestTimeoutMilliseconds),
+      signal: AbortSignal.timeout(remainingMilliseconds),
     });
-    response = await resolveNvidiaResponse(response, {
+  };
+  try {
+    const result = await resolveNvidiaResponseWithFallback(await requestModel(model), {
       apiKey,
       deadlineMilliseconds,
+      fallback: fallbackModel ? () => requestModel(fallbackModel) : undefined,
     });
+    response = result.response;
+    if (result.usedFallback && fallbackModel) providerModel = fallbackModel;
+    primaryUpstreamStatus = result.primaryStatus;
   } catch (error) {
     if (error instanceof NvidiaPendingResponseError) {
       throw new ApiError(503, "Model provider unavailable.", false, error.code, error.context);
@@ -626,12 +642,17 @@ async function generateResponse(
     );
   }
   if (!response.ok) {
+    const context = await providerFailureContext(response);
+    context.provider_model = providerModel;
+    if (primaryUpstreamStatus !== undefined) {
+      context.primary_upstream_status = primaryUpstreamStatus;
+    }
     throw new ApiError(
       503,
       "Model provider unavailable.",
       false,
       "model_provider_error",
-      await providerFailureContext(response),
+      context,
     );
   }
   try {
