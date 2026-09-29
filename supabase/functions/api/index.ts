@@ -1,6 +1,13 @@
 import { NvidiaPendingResponseError, resolveNvidiaResponseWithFallbacks } from "./nvidia.ts";
 import { analyzeVideoClip, VideoModelError } from "./nvidia_video.ts";
 import {
+  ExternalProviderConfig,
+  ExternalProviderError,
+  generateExternalResponse,
+  parseExternalProvider,
+  ProviderConfigurationError,
+} from "./providers.ts";
+import {
   maxPendingVideoMessages,
   maxVideoChunkBytes,
   maxVideoSessionMilliseconds,
@@ -46,6 +53,11 @@ interface StoredImage {
   content_type: string;
   byte_size: number;
   created_at: string;
+}
+
+interface ModelImageReference {
+  contentType: "image/jpeg" | "image/png";
+  url: string;
 }
 
 function defaultErrorCode(status: number): string {
@@ -127,6 +139,9 @@ function redactedErrorText(value: string): string {
       "$1<redacted>",
     )
     .replace(/\bsb_(?:publishable|secret)_[A-Za-z0-9._-]+/g, "<redacted-key>")
+    .replace(/\bsk-(?:ant-)?[A-Za-z0-9_-]{12,}/g, "<redacted-key>")
+    .replace(/\bAIza[A-Za-z0-9_-]{20,}/g, "<redacted-key>")
+    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "<redacted-key>")
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "<redacted-jwt>");
 }
 
@@ -244,6 +259,11 @@ function clientErrorContext(
     "provider_error_code",
     "provider_error_message",
     "upstream_status",
+    "provider",
+    "model",
+    "suggested_action",
+    "maximum_inline_image_bytes",
+    "prior_upstream_statuses",
   ]);
   return Object.fromEntries(
     Object.entries(context).filter(([key]) => allowedKeys.has(key)),
@@ -562,7 +582,7 @@ async function signedImageUrl(
 
 function modelMessage(
   message: ConversationMessage,
-  imageUrls: Map<string, string>,
+  imageUrls: Map<string, ModelImageReference>,
 ): unknown {
   if (message.imageIds.length === 0) {
     return { role: message.role, content: message.content };
@@ -573,7 +593,7 @@ function modelMessage(
       { type: "text", text: message.content },
       ...message.imageIds.map((imageId) => ({
         type: "image_url",
-        image_url: { url: imageUrls.get(imageId) },
+        image_url: { url: imageUrls.get(imageId)?.url },
       })),
     ],
   };
@@ -581,8 +601,41 @@ function modelMessage(
 
 async function generateResponse(
   messages: ConversationMessage[],
-  imageUrls: Map<string, string>,
+  imageUrls: Map<string, ModelImageReference>,
+  provider?: ExternalProviderConfig,
 ): Promise<string> {
+  if (provider) {
+    try {
+      return await generateExternalResponse(
+        provider,
+        messages.map((message) => ({
+          role: message.role,
+          text: message.content,
+          images: message.imageIds.map((imageId) => {
+            const image = imageUrls.get(imageId);
+            if (!image) throw new Error("missing image reference");
+            return image;
+          }),
+        })),
+      );
+    } catch (error) {
+      if (error instanceof ExternalProviderError) {
+        throw new ApiError(error.status, error.message, false, error.code, error.context);
+      }
+      throw new ApiError(
+        503,
+        "The selected model provider request failed. Retry or select another provider.",
+        false,
+        "model_request_failed",
+        {
+          provider: provider.type,
+          model: provider.model,
+          failure_type: error instanceof Error ? error.name : "UnknownError",
+          suggested_action: "Retry or select another provider.",
+        },
+      );
+    }
+  }
   const apiKey = requiredEnvironment("NVIDIA_API_KEY");
   const baseUrl = (Deno.env.get("NVIDIA_BASE_URL") ?? defaultNvidiaBaseUrl)
     .replace(/\/$/, "");
@@ -625,30 +678,67 @@ async function generateResponse(
     priorUpstreamStatuses = result.priorStatuses;
   } catch (error) {
     if (error instanceof NvidiaPendingResponseError) {
-      throw new ApiError(503, "Model provider unavailable.", false, error.code, error.context);
+      throw new ApiError(
+        503,
+        "NVIDIA did not complete the model request. Retry shortly.",
+        false,
+        error.code,
+        {
+          ...error.context,
+          provider: "nvidia",
+          model: providerModel,
+          suggested_action:
+            "Retry shortly. If this continues, contact support with the request ID.",
+        },
+      );
     }
-    throw new ApiError(503, "Model provider unavailable.", false, "model_request_failed", {
-      failure_type: error instanceof Error ? error.name : "UnknownError",
-    });
+    throw new ApiError(
+      503,
+      "The NVIDIA request could not be completed. Retry shortly.",
+      false,
+      "model_request_failed",
+      {
+        provider: "nvidia",
+        model: providerModel,
+        failure_type: error instanceof Error ? error.name : "UnknownError",
+        suggested_action: "Retry shortly. If this continues, contact support with the request ID.",
+      },
+    );
   }
   if (response.status === 429) {
+    const context = await providerFailureContext(response);
     throw new ApiError(
       429,
-      "Model rate limited. Back off and retry.",
+      "NVIDIA rate-limited the request. Retry later.",
       false,
       "model_rate_limited",
-      await providerFailureContext(response),
+      {
+        ...context,
+        provider: "nvidia",
+        model: providerModel,
+        suggested_action: "Retry later or check the NVIDIA account quota and billing.",
+      },
     );
   }
   if (!response.ok) {
     const context = await providerFailureContext(response);
-    context.provider_model = providerModel;
+    context.provider = "nvidia";
+    context.model = providerModel;
+    context.suggested_action = response.status === 401 || response.status === 403
+      ? "Update the deployment NVIDIA_API_KEY and verify its permissions."
+      : response.status === 404
+      ? "Verify that at least one configured NVIDIA fallback model is available."
+      : "Retry shortly. If this continues, contact support with the request ID.";
     if (priorUpstreamStatuses.length > 0) {
       context.prior_upstream_statuses = priorUpstreamStatuses.join(",");
     }
     throw new ApiError(
       503,
-      "Model provider unavailable.",
+      response.status === 401 || response.status === 403
+        ? "NVIDIA rejected the deployment credentials."
+        : response.status === 404
+        ? "None of the configured NVIDIA models are available."
+        : "NVIDIA is unavailable right now. Retry shortly.",
       false,
       "model_provider_error",
       context,
@@ -664,9 +754,18 @@ async function generateResponse(
     }
     return text.trim();
   } catch {
-    throw new ApiError(503, "Model provider unavailable.", false, "model_invalid_response", {
-      upstream_status: response.status,
-    });
+    throw new ApiError(
+      503,
+      "NVIDIA returned no usable text. Retry shortly.",
+      false,
+      "model_invalid_response",
+      {
+        upstream_status: response.status,
+        provider: "nvidia",
+        model: providerModel,
+        suggested_action: "Retry shortly or select your own provider.",
+      },
+    );
   }
 }
 
@@ -718,6 +817,21 @@ async function handleChat(request: Request): Promise<Response> {
   const payload = await requestJson(request);
   const token = validateToken(payload.pairingToken);
   const messages = validateMessages(payload.messages);
+  let provider: ExternalProviderConfig | undefined;
+  try {
+    provider = parseExternalProvider(payload.provider);
+  } catch (error) {
+    if (error instanceof ProviderConfigurationError) {
+      throw new ApiError(
+        422,
+        error.message,
+        false,
+        "provider_configuration_invalid",
+        { suggested_action: "Correct the provider configuration and retry." },
+      );
+    }
+    throw error;
+  }
   if (
     new TextEncoder().encode(JSON.stringify(messages)).byteLength >
       maxTranscriptBytes
@@ -739,9 +853,15 @@ async function handleChat(request: Request): Promise<Response> {
       images.map((image) => signedImageUrl(image, user.accessToken)),
     );
     const imageUrls = new Map(
-      images.map((image, index) => [image.image_id, signedUrls[index]]),
+      images.map((image, index) => [
+        image.image_id,
+        {
+          contentType: image.content_type as "image/jpeg" | "image/png",
+          url: signedUrls[index],
+        },
+      ]),
     );
-    const text = await generateResponse(messages, imageUrls);
+    const text = await generateResponse(messages, imageUrls, provider);
     const responseId = `r_${crypto.randomUUID().replaceAll("-", "")}`;
     const rows = await rpc<
       Array<{

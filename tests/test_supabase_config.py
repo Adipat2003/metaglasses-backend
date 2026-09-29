@@ -51,6 +51,23 @@ def test_edge_api_uses_explicit_authentication_and_permissive_cors() -> None:
     assert "systemPrompt" not in source
 
 
+def test_edge_api_supports_stateless_byok_without_system_injection() -> None:
+    api_directory = ROOT / "supabase" / "functions" / "api"
+    source = (api_directory / "index.ts").read_text(encoding="utf-8")
+    providers = (api_directory / "providers.ts").read_text(encoding="utf-8")
+
+    assert 'from "./providers.ts"' in source
+    assert "parseExternalProvider(payload.provider)" in source
+    assert 'role: "system"' not in providers
+    assert "systemPrompt" not in providers
+    assert "insert(" not in providers
+    assert "upsert(" not in providers
+    request_log_source = source[
+        source.index("function requestLog") : source.index("function responseWithRequestId")
+    ]
+    assert "apiKey" not in request_log_source
+
+
 def test_edge_api_database_functions_are_service_role_only() -> None:
     migration = (
         ROOT / "supabase" / "migrations" / "20260909032038_add_edge_api_rpcs.sql"
