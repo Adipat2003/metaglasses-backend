@@ -193,6 +193,7 @@ docker run --rm --volume "$PWD:/work" --workdir /work \
 docker run --rm --volume "$PWD:/work" --workdir /work \
   denoland/deno:2.5.2 deno test --config supabase/functions/deno.json \
   supabase/functions/api/nvidia_test.ts \
+  supabase/functions/api/providers_test.ts \
   supabase/functions/api/video_stream_test.ts \
   supabase/functions/api/nvidia_video_test.ts
 ```
@@ -278,17 +279,25 @@ host-facing URL.
 - For the Python reference API, confirm `SUPABASE_PUBLISHABLE_KEY` matches the current
   local stack.
 
-### Chat returns 503
+### Chat provider errors
 
 Confirm `NVIDIA_API_KEY` is populated in `supabase/functions/.env` for the Edge API or the
 selected local Python environment file. Health, Auth, pairing, and Storage can work without a
 model request, so a healthy response does not prove the NVIDIA credential is present. For the
-Edge API, inspect the structured `function_logs` record by `request_id`:
+Edge API, inspect the structured `function_logs` record by `request_id`. Each provider error also
+returns `provider`, `model`, `upstream_status` when available, and `suggested_action` to the client.
+Credentials are excluded from logs and error responses.
 
 - `model_request_failed` indicates a timeout or network failure.
 - `model_pending_response_invalid` indicates an invalid NVIDIA polling response.
 - `model_provider_error` indicates a completed non-success provider response.
 - `model_invalid_response` indicates a successful provider response without usable text.
+- `provider_auth_rejected` indicates rejected BYOK credentials, account permissions, or billing.
+- `provider_model_not_found` indicates an unavailable model or Azure deployment name.
+- `provider_rate_limited` indicates provider quota or rate limiting.
+- `provider_request_rejected` indicates an unsupported chat or image request for the model.
+- `provider_configuration_invalid` identifies a missing or invalid provider field before a model
+  request is sent.
 
 ## References
 

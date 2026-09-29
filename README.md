@@ -62,6 +62,65 @@ Chat inference uses Llama 3.2 90B Vision by default. If NVIDIA returns a model-n
 provider-side 5xx error, the request is retried with Llama 3.2 11B Vision and then Kimi K3.
 Authentication, validation, and rate-limit responses are returned without a model fallback.
 
+### Use your own model provider
+
+`POST /v1/chat` also accepts a stateless `provider` object. The provider credentials are used only
+for that request. They are not written to Postgres, Storage, logs, or error responses. Omitting
+`provider` uses the managed NVIDIA fallback chain above. A failed BYOK request never falls back to
+the managed key.
+
+```json
+{
+  "pairingToken": "<PAIRING_TOKEN>",
+  "messages": [{ "role": "user", "content": "What am I looking at?", "imageIds": [] }],
+  "provider": {
+    "type": "openai",
+    "apiKey": "<USER_API_KEY>",
+    "model": "gpt-4.1-mini"
+  }
+}
+```
+
+Supported provider types are `openai`, `anthropic`, `google`, `azure`, `aws-bedrock`, `nvidia`,
+`openrouter`, `groq`, `mistral`, `xai`, `together`, `fireworks`, `deepseek`, `perplexity`, and
+`cerebras`. All except Azure and AWS use the `apiKey` and `model` fields shown above. Each provider
+uses a fixed API host to prevent requests to arbitrary servers.
+
+Azure OpenAI and Azure AI Foundry also require the resource endpoint. The `model` value is the
+deployment name for Azure OpenAI:
+
+```json
+{
+  "type": "azure",
+  "endpoint": "https://<RESOURCE>.openai.azure.com",
+  "apiKey": "<USER_API_KEY>",
+  "model": "<DEPLOYMENT_NAME>"
+}
+```
+
+AWS Bedrock uses SigV4 credentials supplied by the client:
+
+```json
+{
+  "type": "aws-bedrock",
+  "region": "us-east-1",
+  "accessKeyId": "<AWS_ACCESS_KEY_ID>",
+  "secretAccessKey": "<AWS_SECRET_ACCESS_KEY>",
+  "sessionToken": "<OPTIONAL_SESSION_TOKEN>",
+  "model": "<BEDROCK_MODEL_ID>"
+}
+```
+
+Provider failures return a stable error code and safe diagnostic context. The client can show the
+top-level `detail` immediately and use `error.context.suggested_action` for recovery. The response
+also contains a `request_id` that maps to a structured server log without exposing credentials.
+Common codes include `provider_configuration_invalid`, `provider_auth_rejected`,
+`provider_model_not_found`, `provider_rate_limited`, `provider_request_rejected`,
+`model_request_failed`, and `model_invalid_response`.
+
+The API forwards only the user and assistant messages supplied in `messages`. It does not add a
+system prompt or inject server-side context.
+
 ## Ephemeral video streaming
 
 After registering a pairing, connect to the video endpoint with `wss://`, the Supabase access
