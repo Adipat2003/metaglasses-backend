@@ -12,6 +12,16 @@ interface PollOptions {
   signal?: AbortSignal;
 }
 
+interface FallbackOptions extends PollOptions {
+  fallback?: () => Promise<Response>;
+}
+
+export interface NvidiaFallbackResult {
+  response: Response;
+  primaryStatus?: number;
+  usedFallback: boolean;
+}
+
 export class NvidiaPendingResponseError extends Error {
   constructor(
     readonly code: string,
@@ -64,4 +74,21 @@ export async function resolveNvidiaResponse(
   }
 
   return response;
+}
+
+export async function resolveNvidiaResponseWithFallback(
+  initialResponse: Response,
+  options: FallbackOptions,
+): Promise<NvidiaFallbackResult> {
+  const primary = await resolveNvidiaResponse(initialResponse, options);
+  if (primary.status < 500 || primary.status > 599 || !options.fallback) {
+    return { response: primary, usedFallback: false };
+  }
+
+  const fallback = await resolveNvidiaResponse(await options.fallback(), options);
+  return {
+    response: fallback,
+    primaryStatus: primary.status,
+    usedFallback: true,
+  };
 }

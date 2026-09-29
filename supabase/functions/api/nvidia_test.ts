@@ -1,4 +1,8 @@
-import { NvidiaPendingResponseError, resolveNvidiaResponse } from "./nvidia.ts";
+import {
+  NvidiaPendingResponseError,
+  resolveNvidiaResponse,
+  resolveNvidiaResponseWithFallback,
+} from "./nvidia.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -71,4 +75,49 @@ Deno.test("rejects pending NVIDIA responses without a valid request ID", async (
   assert(error instanceof NvidiaPendingResponseError, "a typed polling error should be thrown");
   assert(error.code === "model_pending_response_invalid", "the error code should be actionable");
   assert(error.context.upstream_status === 202, "the pending status should be preserved");
+});
+
+Deno.test("uses the fallback model after a provider-side server error", async () => {
+  let fallbackCalls = 0;
+  const resolved = await resolveNvidiaResponseWithFallback(
+    new Response(null, { status: 500 }),
+    {
+      apiKey: "test-key",
+      deadlineMilliseconds: Date.now() + 10_000,
+      fallback: () => {
+        fallbackCalls += 1;
+        return Promise.resolve(
+          new Response('{"choices":[{"message":{"content":"A bicycle."}}]}', {
+            status: 200,
+          }),
+        );
+      },
+    },
+  );
+
+  assert(resolved.response.status === 200, "the fallback response should be returned");
+  assert(resolved.primaryStatus === 500, "the primary failure should be retained");
+  assert(resolved.usedFallback, "the result should identify fallback use");
+  assert(fallbackCalls === 1, "the fallback should be requested once");
+});
+
+Deno.test("does not use the fallback model for client and rate-limit errors", async () => {
+  for (const status of [400, 401, 404, 429]) {
+    let fallbackCalls = 0;
+    const resolved = await resolveNvidiaResponseWithFallback(
+      new Response(null, { status }),
+      {
+        apiKey: "test-key",
+        deadlineMilliseconds: Date.now() + 10_000,
+        fallback: () => {
+          fallbackCalls += 1;
+          return Promise.resolve(new Response(null, { status: 200 }));
+        },
+      },
+    );
+
+    assert(resolved.response.status === status, `${status} should be returned unchanged`);
+    assert(!resolved.usedFallback, `${status} should not use the fallback`);
+    assert(fallbackCalls === 0, `${status} should not request the fallback`);
+  }
 });

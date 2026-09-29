@@ -58,6 +58,10 @@ metadata expire with their pairing and are deleted by the scheduled cleanup func
 API does not impose a fixed number of images per pairing, although each image must still satisfy
 the file size and content-type validation.
 
+Chat inference uses Llama 3.2 90B Vision by default. If NVIDIA returns a provider-side 5xx error,
+the request is retried once with Llama 3.2 11B Vision. Authentication, validation, and rate-limit
+responses are returned without a model fallback.
+
 ## Ephemeral video streaming
 
 After registering a pairing, connect to the video endpoint with `wss://`, the Supabase access
