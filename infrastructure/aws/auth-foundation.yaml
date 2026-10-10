@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "MetaGlasses authentication foundation: Cognito email sign-in for the mobile client."
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: one Cognito user pool and one public mobile app client
+    must:
+      - Mobile clients must never receive an app client secret.
+      - Supabase users stay unchanged until a migration strategy is approved.
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Replaces Supabase Auth with a managed OIDC issuer for the mobile app.
+        must:
+          - Email verification is required before the account can be trusted.
+          - Deletion protection must remain active.
+        mutable: change-with-constraints
+        mutability:
+          UsernameAttributes: must-never-change
+          Schema: review-required
+    Properties:
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      AutoVerifiedAttributes:
+        - email
+      DeletionProtection: ACTIVE
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+      MfaConfiguration: OPTIONAL
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 7
+      UsernameAttributes:
+        - email
+      UserPoolAddOns:
+        AdvancedSecurityMode: AUDIT
+      UserPoolTags:
+        Project: metaglasses
+
+  MobileAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Native mobile client uses SRP and rotating refresh tokens without a secret.
+        must:
+          - GenerateSecret must remain false.
+          - ALLOW_REFRESH_TOKEN_AUTH must stay absent while refresh rotation is enabled.
+        mutable: change-with-constraints
+        mutability:
+          GenerateSecret: must-never-change
+          RefreshTokenRotation: review-required
+    Properties:
+      AccessTokenValidity: 15
+      EnableTokenRevocation: true
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      RefreshTokenRotation:
+        Feature: ENABLED
+        RetryGracePeriodSeconds: 30
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        RefreshToken: days
+      UserPoolId: !Ref UserPool
+
+Outputs:
+  UserPoolId:
+    Description: Cognito user pool ID for the API and mobile application.
+    Value: !Ref UserPool
+  MobileAppClientId:
+    Description: Public Cognito app client ID for the mobile application.
+    Value: !Ref MobileAppClient
+  JwtIssuer:
+    Description: JWT issuer that the API will validate.
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
