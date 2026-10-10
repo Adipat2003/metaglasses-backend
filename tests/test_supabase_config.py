@@ -18,6 +18,14 @@ def test_environment_templates_are_centralized() -> None:
     assert not (ROOT / "supabase" / "oauth.env.example").exists()
 
 
+def test_aws_runtime_template_has_one_pairing_image_bucket() -> None:
+    template = (ROOT / "config" / "env" / "edge-functions.env.example").read_text(
+        encoding="utf-8"
+    )
+
+    assert template.count("PAIRING_IMAGE_BUCKET=") == 1
+
+
 def test_local_supabase_enables_google_and_apple_with_environment_credentials() -> None:
     config_path = ROOT / "supabase" / "config.toml"
     config = tomllib.loads(config_path.read_text(encoding="utf-8"))
