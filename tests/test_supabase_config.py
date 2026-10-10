@@ -36,7 +36,7 @@ def test_local_supabase_enables_google_and_apple_with_environment_credentials() 
     assert apple["redirect_uri"] == "env(SUPABASE_AUTH_EXTERNAL_APPLE_REDIRECT_URI)"
 
 
-def test_edge_api_uses_explicit_authentication_and_permissive_cors() -> None:
+def test_api_uses_cognito_authentication_and_permissive_cors() -> None:
     config = tomllib.loads((ROOT / "supabase" / "config.toml").read_text(encoding="utf-8"))
     source = (ROOT / "supabase" / "functions" / "api" / "index.ts").read_text(
         encoding="utf-8"
@@ -44,9 +44,10 @@ def test_edge_api_uses_explicit_authentication_and_permissive_cors() -> None:
 
     assert config["functions"]["api"]["verify_jwt"] is False
     assert '"Access-Control-Allow-Origin": "*"' in source
-    assert 'fetch(`${supabaseUrl()}/auth/v1/user`' in source
-    assert 'requiredEnvironment("NVIDIA_API_KEY")' in source
-    assert "SUPABASE_SERVICE_ROLE_KEY" in source
+    assert 'CognitoJwtVerifier.create' in source
+    assert 'tokenUse: "access"' in source
+    assert 'NVIDIA_SECRET_ARN' in source
+    assert "SUPABASE_SERVICE_ROLE_KEY" not in source
     assert 'role: "system"' not in source
     assert "systemPrompt" not in source
 
@@ -106,15 +107,15 @@ def test_hosted_edge_api_does_not_limit_images_per_pairing() -> None:
     assert "return 'registered';" in migration
 
 
-def test_cd_deploys_supabase_trial_automatically_and_production_manually() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "cd.yml").read_text(encoding="utf-8")
+def test_cd_deploys_to_ec2_through_oidc_and_ssm() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "aws-deploy.yml").read_text(
+        encoding="utf-8"
+    )
 
-    assert "uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api" in workflow
-    assert "hxtdfghufjjmeltarffl.supabase.co/functions/v1/api" in workflow
-    assert "supabase@2.116.0 db push" in workflow
-    assert "supabase@2.116.0 functions deploy" in workflow
-    assert workflow.count(
-        "cp supabase/signing_keys.example.json supabase/signing_keys.json"
-    ) == 2
-    assert "github.event_name == 'workflow_dispatch'" in workflow
-    assert "build-push-action" not in workflow
+    assert "id-token: write" in workflow
+    assert "configure-aws-credentials" in workflow
+    assert "METAGLASSES_AWS_DEPLOY_ROLE_ARN" in workflow
+    assert "docker push" in workflow
+    assert "aws ssm send-command" in workflow
+    assert "supabase@2.116.0" not in workflow
+    assert not (ROOT / ".github" / "workflows" / "cd.yml").exists()

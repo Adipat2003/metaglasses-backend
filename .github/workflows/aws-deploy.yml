@@ -1,0 +1,36 @@
+name: Deploy AWS API
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AWS_REGION: us-east-1
+      COMPUTE_STACK: metaglasses-compute
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.METAGLASSES_AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: stack
+        run: |
+          outputs=$(aws cloudformation describe-stacks --stack-name "$COMPUTE_STACK" --query 'Stacks[0].Outputs' --output json)
+          echo "repository=$(jq -r '.[] | select(.OutputKey == "ApiRepositoryUri") | .OutputValue' <<<"$outputs")" >> "$GITHUB_OUTPUT"
+          echo "instance=$(jq -r '.[] | select(.OutputKey == "ApiInstanceId") | .OutputValue' <<<"$outputs")" >> "$GITHUB_OUTPUT"
+          echo "registry=$(jq -r '.[] | select(.OutputKey == "ApiRepositoryUri") | .OutputValue' <<<"$outputs" | cut -d/ -f1)" >> "$GITHUB_OUTPUT"
+      - run: |
+          aws ecr get-login-password | docker login --username AWS --password-stdin "${{ steps.stack.outputs.registry }}"
+          docker build --tag "${{ steps.stack.outputs.repository }}:${GITHUB_SHA}" .
+          docker push "${{ steps.stack.outputs.repository }}:${GITHUB_SHA}"
+      - run: |
+          aws ssm send-command --instance-ids "${{ steps.stack.outputs.instance }}" --document-name AWS-RunShellScript \
+            --parameters "commands=[\"set -eu\",\"aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin ${{ steps.stack.outputs.registry }}\",\"docker pull ${{ steps.stack.outputs.repository }}:$GITHUB_SHA\",\"printf '%s' '${{ steps.stack.outputs.repository }}:$GITHUB_SHA' >/opt/metaglasses/image\",\"docker rm -f metaglasses-api || true\",\"docker run -d --name metaglasses-api --restart unless-stopped --env-file /opt/metaglasses/runtime.env ${{ steps.stack.outputs.repository }}:$GITHUB_SHA\"]"

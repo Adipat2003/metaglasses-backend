@@ -74,6 +74,87 @@ Resources:
           Value: metaglasses
       VpcId: !Ref DatabaseVpc
 
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Gives the private-by-security-group API instance outbound access to AWS and NVIDIA.
+        must:
+          - It must never create a public route for database subnets.
+        mutable: review-required
+    Properties:
+      Tags:
+        - Key: Project
+          Value: metaglasses
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Attaches the dedicated egress gateway to the application VPC.
+        must:
+          - Only the API subnet route table may target this gateway.
+        mutable: review-required
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref DatabaseVpc
+
+  ApiPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Isolates the API egress route from the database subnet group.
+        must:
+          - Database subnets must not be associated with this route table.
+        mutable: review-required
+    Properties:
+      VpcId: !Ref DatabaseVpc
+
+  ApiDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Lets the API instance reach SSM, ECR, Secrets Manager, S3, and NVIDIA.
+        must:
+          - No inbound database access is created by this route.
+        mutable: review-required
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref ApiPublicRouteTable
+
+  ApiSubnet:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Hosts the single EC2 API instance without exposing database subnets.
+        must:
+          - Security groups must keep all inbound traffic closed until a TLS endpoint is approved.
+        mutable: review-required
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.42.0.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: metaglasses-api
+        - Key: Project
+          Value: metaglasses
+      VpcId: !Ref DatabaseVpc
+
+  ApiSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Applies public egress only to the API subnet.
+        must:
+          - Database subnets remain on their isolated implicit route tables.
+        mutable: review-required
+    Properties:
+      RouteTableId: !Ref ApiPublicRouteTable
+      SubnetId: !Ref ApiSubnet
+
   DatabaseSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Metadata:
@@ -133,6 +214,8 @@ Resources:
       DatabaseName: metaglasses
       DBSubnetGroupName: !Ref DatabaseSubnetGroup
       DeletionProtection: true
+      EnableHttpEndpoint: true
+      EnableIAMDatabaseAuthentication: true
       EnableCloudwatchLogsExports:
         - postgresql
       Engine: aurora-postgresql
@@ -191,3 +274,6 @@ Outputs:
   DatabaseVpcId:
     Description: VPC ID for the future API compute resources.
     Value: !Ref DatabaseVpc
+  ApiSubnetId:
+    Description: Public-egress subnet reserved for the private-by-security-group API instance.
+    Value: !Ref ApiSubnet
