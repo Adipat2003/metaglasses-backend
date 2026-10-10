@@ -138,7 +138,7 @@ Resources:
           #!/bin/bash
           set -eu
           test -f /opt/metaglasses/image || exit 0
-          docker run --rm --env-file /opt/metaglasses/runtime.env "$(cat /opt/metaglasses/image)" deno run --allow-env --allow-net supabase/functions/cleanup-pairing-images/index.ts
+          docker run --rm --env-file /opt/metaglasses/runtime.env "$(cat /opt/metaglasses/image)" run --allow-env --allow-net supabase/functions/cleanup-pairing-images/index.ts
           EOF
           chmod 700 /usr/local/bin/metaglasses-cleanup
           cat >/etc/systemd/system/metaglasses-cleanup.timer <<'EOF'

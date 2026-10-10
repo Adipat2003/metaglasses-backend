@@ -117,5 +117,16 @@ def test_cd_deploys_to_ec2_through_oidc_and_ssm() -> None:
     assert "METAGLASSES_AWS_DEPLOY_ROLE_ARN" in workflow
     assert "docker push" in workflow
     assert "aws ssm send-command" in workflow
+    assert "aws ssm wait command-executed" in workflow
+    assert "127.0.0.1:8000:8000" in workflow
     assert "supabase@2.116.0" not in workflow
+
+
+def test_aurora_migration_is_marked_after_its_first_successful_run() -> None:
+    migration = (ROOT / "supabase" / "functions" / "migrate.ts").read_text(encoding="utf-8")
+
+    assert "app.schema_migrations" in migration
+    assert "database_migration_skipped" in migration
+    assert "begin;" in migration
+    assert "commit;" in migration
     assert not (ROOT / ".github" / "workflows" / "cd.yml").exists()

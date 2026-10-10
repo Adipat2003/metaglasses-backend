@@ -571,7 +571,15 @@ function nvidiaApiKey(): Promise<string> {
     if (!secretArn) return requiredEnvironment("NVIDIA_API_KEY");
     const response = await secrets.send(new GetSecretValueCommand({ SecretId: secretArn }));
     if (!response.SecretString) throw new ApiError(503, "NVIDIA credentials are unavailable.");
-    return response.SecretString;
+    try {
+      const value = JSON.parse(response.SecretString) as { NVIDIA_API_KEY?: unknown };
+      if (typeof value.NVIDIA_API_KEY === "string" && value.NVIDIA_API_KEY) {
+        return value.NVIDIA_API_KEY;
+      }
+    } catch {
+      return response.SecretString;
+    }
+    throw new ApiError(503, "NVIDIA credentials are unavailable.");
   })();
   return nvidiaApiKeyPromise;
 }
