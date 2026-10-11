@@ -220,7 +220,7 @@ Resources:
             Action: sts:AssumeRoleWithWebIdentity
             Condition:
               StringEquals: { token.actions.githubusercontent.com:aud: sts.amazonaws.com }
-              StringLike: { token.actions.githubusercontent.com:sub: repo:Adipat2003/metaglasses-backend:ref:refs/heads/main }
+              StringEquals: { token.actions.githubusercontent.com:sub: repo:Adipat2003@99374679/metaglasses-backend@1357463095:ref:refs/heads/main }
       Policies:
         - PolicyName: DeployApiImage
           PolicyDocument:
