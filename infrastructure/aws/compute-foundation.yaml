@@ -25,6 +25,12 @@ Parameters:
     Type: String
   NvidiaSecretArn:
     Type: String
+  DatabaseHost:
+    Type: String
+  CognitoUserPoolId:
+    Type: String
+  CognitoAppClientId:
+    Type: String
   AmiId:
     Type: AWS::EC2::Image::Id
   InstanceType:
@@ -128,32 +134,49 @@ Resources:
         ImageId: !Ref AmiId
         InstanceType: !Ref InstanceType
         MetadataOptions: { HttpTokens: required, HttpPutResponseHopLimit: 2 }
-        UserData: !Base64 |
-          #!/bin/bash
-          set -eu
-          dnf install -y docker
-          systemctl enable --now docker
-          mkdir -p /opt/metaglasses
-          cat >/usr/local/bin/metaglasses-cleanup <<'EOF'
-          #!/bin/bash
-          set -eu
-          test -f /opt/metaglasses/image || exit 0
-          docker run --rm --env-file /opt/metaglasses/runtime.env "$(cat /opt/metaglasses/image)" run --allow-env --allow-net supabase/functions/cleanup-pairing-images/index.ts
-          EOF
-          chmod 700 /usr/local/bin/metaglasses-cleanup
-          cat >/etc/systemd/system/metaglasses-cleanup.timer <<'EOF'
-          [Timer]
-          OnBootSec=2min
-          OnUnitActiveSec=1min
-          [Install]
-          WantedBy=timers.target
-          EOF
-          cat >/etc/systemd/system/metaglasses-cleanup.service <<'EOF'
-          [Service]
-          Type=oneshot
-          ExecStart=/usr/local/bin/metaglasses-cleanup
-          EOF
-          systemctl enable --now metaglasses-cleanup.timer
+        UserData:
+          Fn::Base64:
+            Fn::Sub: |
+              #!/bin/bash
+              set -eu
+              dnf install -y docker
+              systemctl enable --now docker
+              mkdir -p /opt/metaglasses
+              cat >/opt/metaglasses/runtime.env <<'EOF'
+              APP_ENV=aws
+              AWS_REGION=${AWS::Region}
+              COGNITO_USER_POOL_ID=${CognitoUserPoolId}
+              COGNITO_APP_CLIENT_ID=${CognitoAppClientId}
+              DATABASE_HOST=${DatabaseHost}
+              DATABASE_PORT=5432
+              DATABASE_NAME=metaglasses
+              PAIRING_IMAGE_BUCKET=${PairingImagesBucketName}
+              NVIDIA_SECRET_ARN=${NvidiaSecretArn}
+              NVIDIA_MODEL=meta/llama-3.2-90b-vision-instruct
+              NVIDIA_VIDEO_MODEL=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+              NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+              EOF
+              chmod 600 /opt/metaglasses/runtime.env
+              cat >/usr/local/bin/metaglasses-cleanup <<'EOF'
+              #!/bin/bash
+              set -eu
+              test -f /opt/metaglasses/image || exit 0
+              docker run --rm --env-file /opt/metaglasses/runtime.env "$(cat /opt/metaglasses/image)" run --allow-env --allow-net supabase/functions/cleanup-pairing-images/index.ts
+              EOF
+              chmod 700 /usr/local/bin/metaglasses-cleanup
+              cat >/etc/systemd/system/metaglasses-cleanup.timer <<'EOF'
+              [Timer]
+              OnBootSec=2min
+              OnUnitActiveSec=1min
+              [Install]
+              WantedBy=timers.target
+              EOF
+              cat >/etc/systemd/system/metaglasses-cleanup.service <<'EOF'
+              [Service]
+              Type=oneshot
+              ExecStart=/usr/local/bin/metaglasses-cleanup
+              EOF
+              systemctl enable --now metaglasses-cleanup.timer
 
   ApiInstance:
     Type: AWS::EC2::Instance

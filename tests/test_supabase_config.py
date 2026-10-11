@@ -137,4 +137,15 @@ def test_aurora_migration_is_marked_after_its_first_successful_run() -> None:
     assert "database_migration_skipped" in migration
     assert "begin;" in migration
     assert "commit;" in migration
+
+
+def test_compute_bootstrap_writes_non_secret_runtime_configuration() -> None:
+    template = (ROOT / "infrastructure" / "aws" / "compute-foundation.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "NVIDIA_SECRET_ARN=${NvidiaSecretArn}" in template
+    assert "DATABASE_HOST=${DatabaseHost}" in template
+    assert "COGNITO_USER_POOL_ID=${CognitoUserPoolId}" in template
+    assert "chmod 600 /opt/metaglasses/runtime.env" in template
     assert not (ROOT / ".github" / "workflows" / "cd.yml").exists()
