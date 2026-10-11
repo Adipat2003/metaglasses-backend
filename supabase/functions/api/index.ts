@@ -1,4 +1,18 @@
 import { NvidiaPendingResponseError, resolveNvidiaResponseWithFallbacks } from "./nvidia.ts";
+import { CognitoJwtVerifier } from "npm:aws-jwt-verify@5.2.1";
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "npm:@aws-sdk/client-s3@3.1149.0";
+import { Signer } from "npm:@aws-sdk/rds-signer@3.1149.0";
+import {
+  GetSecretValueCommand,
+  SecretsManagerClient,
+} from "npm:@aws-sdk/client-secrets-manager@3.1149.0";
+import { getSignedUrl } from "npm:@aws-sdk/s3-request-presigner@3.1149.0";
+import postgres from "npm:postgres@3.4.9";
 import { analyzeVideoClip, VideoModelError } from "./nvidia_video.ts";
 import {
   ExternalProviderConfig,
@@ -38,7 +52,6 @@ type PairingState = "idle" | "listening" | "thinking" | "speaking";
 
 interface AuthenticatedUser {
   id: string;
-  accessToken: string;
 }
 
 interface ConversationMessage {
@@ -91,7 +104,7 @@ class ApiError extends Error {
 interface RequestLog {
   event: "api_request_completed";
   service: "api";
-  environment: "local" | "trial" | "prod" | "unknown";
+  environment: "local" | "aws" | "unknown";
   request_id: string;
   method: string;
   route: string;
@@ -106,7 +119,7 @@ interface RequestLog {
   };
 }
 
-function requestEnvironment(): "local" | "trial" | "prod" | "unknown" {
+function requestEnvironment(): "local" | "aws" | "unknown" {
   try {
     return environmentName();
   } catch {
@@ -122,7 +135,7 @@ function normalizedRoute(path: string): string {
 interface VideoStreamLog {
   event: "video_stream_closed";
   service: "api";
-  environment: "local" | "trial" | "prod" | "unknown";
+  environment: "local" | "aws" | "unknown";
   request_id: string;
   session_id: string;
   duration_ms: number;
@@ -304,108 +317,94 @@ function requiredEnvironment(name: string): string {
   return value;
 }
 
-function keyFromEnvironment(mapName: string, legacyName: string): string {
-  const encodedKeys = Deno.env.get(mapName);
-  if (encodedKeys) {
-    try {
-      const keys = JSON.parse(encodedKeys) as Record<string, unknown>;
-      const candidate = keys.default ?? Object.values(keys)[0];
-      if (typeof candidate === "string" && candidate) {
-        return candidate;
-      }
-    } catch {
-      throw new ApiError(503, `${mapName} is invalid.`);
-    }
-  }
-  return requiredEnvironment(legacyName);
-}
-
-function publishableKey(): string {
-  return keyFromEnvironment("SUPABASE_PUBLISHABLE_KEYS", "SUPABASE_ANON_KEY");
-}
-
-function secretKey(): string {
-  return keyFromEnvironment(
-    "SUPABASE_SECRET_KEYS",
-    "SUPABASE_SERVICE_ROLE_KEY",
-  );
-}
-
-function supabaseUrl(): string {
-  return requiredEnvironment("SUPABASE_URL").replace(/\/$/, "");
-}
-
-function environmentName(): "local" | "trial" | "prod" {
-  const url = supabaseUrl();
-  if (url.includes("uitdzmwfqtsohgffhuom")) return "trial";
-  if (url.includes("hxtdfghufjjmeltarffl")) return "prod";
-  return "local";
+function environmentName(): "local" | "aws" {
+  return Deno.env.get("APP_ENV") === "local" ? "local" : "aws";
 }
 
 function imageBucket(): string {
-  const configured = Deno.env.get("PAIRING_IMAGE_BUCKET")?.trim();
-  if (configured) return configured;
-  return environmentName() === "prod" ? "images" : "Images";
+  return requiredEnvironment("PAIRING_IMAGE_BUCKET");
 }
 
-function adminHeaders(): Record<string, string> {
-  const key = secretKey();
-  return {
-    apikey: key,
-    ...(key.startsWith("sb_secret_") ? {} : { Authorization: `Bearer ${key}` }),
-    "Content-Type": "application/json",
-  };
+function awsRegion(): string {
+  return requiredEnvironment("AWS_REGION");
 }
 
-function userHeaders(
-  accessToken: string,
-  contentType?: string,
-): Record<string, string> {
-  return {
-    apikey: publishableKey(),
-    Authorization: `Bearer ${accessToken}`,
-    ...(contentType ? { "Content-Type": contentType } : {}),
-  };
-}
+const s3 = new S3Client({ region: awsRegion() });
+const secrets = new SecretsManagerClient({ region: awsRegion() });
+const verifier = CognitoJwtVerifier.create({
+  userPoolId: requiredEnvironment("COGNITO_USER_POOL_ID"),
+  clientId: requiredEnvironment("COGNITO_APP_CLIENT_ID"),
+  tokenUse: "access",
+});
+const databaseSigner = new Signer({
+  hostname: requiredEnvironment("DATABASE_HOST"),
+  port: Number(requiredEnvironment("DATABASE_PORT")),
+  username: "metaglasses_api",
+  region: awsRegion(),
+});
+const database = postgres({
+  host: requiredEnvironment("DATABASE_HOST"),
+  port: Number(requiredEnvironment("DATABASE_PORT")),
+  database: requiredEnvironment("DATABASE_NAME"),
+  username: "metaglasses_api",
+  password: () => databaseSigner.getAuthToken(),
+  ssl: "require",
+  max: 5,
+  connect_timeout: 10,
+  idle_timeout: 20,
+});
 
-async function rpc<T>(
-  name: string,
-  parameters: Record<string, unknown>,
-): Promise<T> {
-  const response = await fetch(`${supabaseUrl()}/rest/v1/rpc/${name}`, {
-    method: "POST",
-    headers: adminHeaders(),
-    body: JSON.stringify(parameters),
-  });
-  if (!response.ok) {
+async function rpc<T>(name: string, parameters: Record<string, unknown>): Promise<T> {
+  try {
+    const tokenHash = typeof parameters.p_token_hash === "string" ? parameters.p_token_hash : null;
+    const ownerId = typeof parameters.p_owner_id === "string" ? parameters.p_owner_id : null;
+    switch (name) {
+      case "edge_api_set_state":
+        return (await database`select app.set_state(${tokenHash}, ${ownerId}, ${parameters
+          .p_state as string}, ${parameters.p_ttl_seconds as number}) as result`)[0].result as T;
+      case "edge_api_pairing_access":
+        return (await database`select app.pairing_access(${tokenHash}, ${ownerId}) as result`)[0]
+          .result as T;
+      case "edge_api_get_display":
+        return await database`select * from app.get_display(${tokenHash})` as T;
+      case "edge_api_get_images":
+        return await database`select * from app.get_images(${tokenHash}, ${ownerId}, ${parameters
+          .p_image_ids as string[]})` as T;
+      case "edge_api_save_response":
+        return await database`select * from app.save_response(${tokenHash}, ${ownerId}, ${parameters
+          .p_response_id as string}, ${parameters.p_response_text as string}, ${parameters
+          .p_ttl_seconds as number})` as T;
+      case "edge_api_register_image":
+        return (await database`select app.register_image(${tokenHash}, ${ownerId}, ${parameters
+          .p_image_id as string}, ${parameters.p_object_path as string}, ${parameters
+          .p_content_type as string}, ${parameters.p_byte_size as number}) as result`)[0]
+          .result as T;
+      case "edge_api_remove_image":
+        return await database`select * from app.remove_image(${tokenHash}, ${ownerId}, ${parameters
+          .p_image_id as string})` as T;
+      default:
+        throw new Error(`Unsupported database operation: ${name}`);
+    }
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
     throw new ApiError(503, "Pairing storage unavailable.", false, "pairing_rpc_failed", {
       operation: name,
-      upstream_status: response.status,
     });
   }
-  return (await response.json()) as T;
 }
 
 async function authenticate(request: Request): Promise<AuthenticatedUser> {
-  const authorization = request.headers.get("authorization") ?? "";
-  const match = authorization.match(/^Bearer\s+(.+)$/i);
-  if (!match) {
-    throw new ApiError(401, "Missing or invalid access token.", true);
+  const match = (request.headers.get("authorization") ?? "").match(/^Bearer\s+(.+)$/i);
+  if (!match) throw new ApiError(401, "Missing or invalid access token.", true);
+  try {
+    const payload = await verifier.verify(match[1].trim());
+    if (typeof payload.sub !== "string" || !uuidPattern.test(payload.sub)) {
+      throw new Error("invalid subject");
+    }
+    return { id: payload.sub };
+  } catch {
+    throw new ApiError(401, "Missing or invalid access token.", true, "auth_rejected");
   }
-  const accessToken = match[1].trim();
-  const response = await fetch(`${supabaseUrl()}/auth/v1/user`, {
-    headers: userHeaders(accessToken),
-  });
-  if (!response.ok) {
-    throw new ApiError(401, "Missing or invalid access token.", true, "auth_rejected", {
-      upstream_status: response.status,
-    });
-  }
-  const user = (await response.json()) as { id?: unknown };
-  if (typeof user.id !== "string" || !uuidPattern.test(user.id)) {
-    throw new ApiError(401, "Missing or invalid access token.", true);
-  }
-  return { id: user.id, accessToken };
 }
 
 const tokenPattern = /^[0-9a-fA-F]{32}$/;
@@ -552,32 +551,37 @@ async function getImages(
   }
 }
 
-async function signedImageUrl(
-  image: StoredImage,
-  accessToken: string,
-): Promise<string> {
-  const bucket = encodeURIComponent(imageBucket());
-  const path = image.object_path.split("/").map(encodeURIComponent).join("/");
-  const response = await fetch(
-    `${supabaseUrl()}/storage/v1/object/sign/${bucket}/${path}`,
-    {
-      method: "POST",
-      headers: userHeaders(accessToken, "application/json"),
-      body: JSON.stringify({ expiresIn: signedUrlTtlSeconds }),
-    },
-  );
-  if (!response.ok) {
-    throw new ApiError(503, "Image storage unavailable.", false, "storage_sign_failed", {
-      upstream_status: response.status,
-    });
+async function signedImageUrl(image: StoredImage): Promise<string> {
+  try {
+    return await getSignedUrl(
+      s3,
+      new GetObjectCommand({ Bucket: imageBucket(), Key: image.object_path }),
+      { expiresIn: signedUrlTtlSeconds },
+    );
+  } catch {
+    throw new ApiError(503, "Image storage unavailable.", false, "storage_sign_failed");
   }
-  const payload = (await response.json()) as { signedURL?: unknown };
-  if (typeof payload.signedURL !== "string" || !payload.signedURL) {
-    throw new ApiError(503, "Image storage unavailable.", false, "storage_invalid_response");
-  }
-  return payload.signedURL.startsWith("http")
-    ? payload.signedURL
-    : `${supabaseUrl()}/storage/v1${payload.signedURL}`;
+}
+
+let nvidiaApiKeyPromise: Promise<string> | undefined;
+
+function nvidiaApiKey(): Promise<string> {
+  nvidiaApiKeyPromise ??= (async () => {
+    const secretArn = Deno.env.get("NVIDIA_SECRET_ARN")?.trim();
+    if (!secretArn) return requiredEnvironment("NVIDIA_API_KEY");
+    const response = await secrets.send(new GetSecretValueCommand({ SecretId: secretArn }));
+    if (!response.SecretString) throw new ApiError(503, "NVIDIA credentials are unavailable.");
+    try {
+      const value = JSON.parse(response.SecretString) as { NVIDIA_API_KEY?: unknown };
+      if (typeof value.NVIDIA_API_KEY === "string" && value.NVIDIA_API_KEY) {
+        return value.NVIDIA_API_KEY;
+      }
+    } catch {
+      return response.SecretString;
+    }
+    throw new ApiError(503, "NVIDIA credentials are unavailable.");
+  })();
+  return nvidiaApiKeyPromise;
 }
 
 function modelMessage(
@@ -636,7 +640,7 @@ async function generateResponse(
       );
     }
   }
-  const apiKey = requiredEnvironment("NVIDIA_API_KEY");
+  const apiKey = await nvidiaApiKey();
   const baseUrl = (Deno.env.get("NVIDIA_BASE_URL") ?? defaultNvidiaBaseUrl)
     .replace(/\/$/, "");
   const model = Deno.env.get("NVIDIA_MODEL")?.trim() || defaultNvidiaModel;
@@ -850,7 +854,7 @@ async function handleChat(request: Request): Promise<Response> {
   try {
     const images = await getImages(token, user.id, imageIds);
     const signedUrls = await Promise.all(
-      images.map((image) => signedImageUrl(image, user.accessToken)),
+      images.map((image) => signedImageUrl(image)),
     );
     const imageUrls = new Map(
       images.map((image, index) => [
@@ -968,25 +972,19 @@ async function handleImageUpload(
     );
   }
 
-  const bucket = encodeURIComponent(imageBucket());
-  const path = objectPath.split("/").map(encodeURIComponent).join("/");
-  const upload = await fetch(
-    `${supabaseUrl()}/storage/v1/object/${bucket}/${path}`,
-    {
-      method: "POST",
-      headers: {
-        ...userHeaders(user.accessToken, contentType),
-        "Cache-Control": "max-age=0",
-        "x-upsert": "false",
-      },
-      body: bytes,
-    },
-  );
-  if (!upload.ok) {
+  try {
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: imageBucket(),
+        Key: objectPath,
+        Body: bytes,
+        ContentType: contentType,
+        CacheControl: "max-age=0",
+      }),
+    );
+  } catch {
     await removeImageMetadata(token, user.id, imageId).catch(() => undefined);
-    throw new ApiError(503, "Image storage unavailable.", false, "storage_upload_failed", {
-      upstream_status: upload.status,
-    });
+    throw new ApiError(503, "Image storage unavailable.", false, "storage_upload_failed");
   }
   return jsonResponse(
     {
@@ -1010,16 +1008,10 @@ async function handleImageDelete(
   await pairingAccess(token, user.id);
   const images = await getImages(token, user.id, [imageId]);
   const image = images[0];
-  const bucket = encodeURIComponent(imageBucket());
-  const deletion = await fetch(`${supabaseUrl()}/storage/v1/object/${bucket}`, {
-    method: "DELETE",
-    headers: userHeaders(user.accessToken, "application/json"),
-    body: JSON.stringify({ prefixes: [image.object_path] }),
-  });
-  if (!deletion.ok) {
-    throw new ApiError(503, "Image storage unavailable.", false, "storage_delete_failed", {
-      upstream_status: deletion.status,
-    });
+  try {
+    await s3.send(new DeleteObjectCommand({ Bucket: imageBucket(), Key: image.object_path }));
+  } catch {
+    throw new ApiError(503, "Image storage unavailable.", false, "storage_delete_failed");
   }
   await removeImageMetadata(token, user.id, imageId);
   return emptyResponse(204);
@@ -1108,7 +1100,7 @@ async function handleVideoStream(
         throw new VideoStreamProtocolError("The stream has already started.");
       }
       if (control.mode === "nvidia") {
-        requiredEnvironment("NVIDIA_API_KEY");
+        await nvidiaApiKey();
         inferencePrompt = control.prompt;
       }
       started = true;
@@ -1154,7 +1146,7 @@ async function handleVideoStream(
         ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
         : new Uint8Array();
       const job = analyzeVideoClip(bytes, {
-        apiKey: requiredEnvironment("NVIDIA_API_KEY"),
+        apiKey: await nvidiaApiKey(),
         prompt: inferencePrompt,
         signal: controller.signal,
         baseUrl: Deno.env.get("NVIDIA_BASE_URL")?.trim() || undefined,

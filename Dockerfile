@@ -1,23 +1,11 @@
-FROM ghcr.io/astral-sh/uv:0.12.9 AS uv
-FROM python:3.12-slim
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
-
-RUN groupadd --system app && useradd --system --gid app --create-home app
-
-COPY --from=uv /uv /uvx /bin/
+FROM denoland/deno:2.5.2
 
 WORKDIR /app
-COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-dev --no-install-project
+COPY supabase/functions ./supabase/functions
+COPY database/migrations ./database/migrations
+RUN deno cache --config supabase/functions/deno.json supabase/functions/api/index.ts \
+  supabase/functions/cleanup-pairing-images/index.ts \
+  supabase/functions/migrate.ts
 
-COPY app ./app
-
-USER app
-EXPOSE 10000
-
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD /app/.venv/bin/python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.getenv('PORT', '10000') + '/healthz', timeout=2)"
-
-CMD ["/bin/sh", "-c", "exec /app/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
+ENTRYPOINT ["deno"]
+CMD ["run", "--allow-env", "--allow-net", "supabase/functions/api/index.ts"]

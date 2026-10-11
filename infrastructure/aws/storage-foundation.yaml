@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "MetaGlasses image storage foundation: private encrypted temporary objects only."
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: one private S3 bucket, API-only access added in the compute phase
+    must:
+      - No public object access.
+      - All object requests must use TLS.
+      - Lifecycle expiry is only a safety net; the application deletes images at pairing expiry.
+
+Resources:
+  PairingImagesBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Replaces Supabase private Storage for short-lived pairing images.
+        must:
+          - Bucket must remain private, encrypted, versioned, and TLS-only.
+          - Objects must expire after the application cleanup window.
+        mutable: change-with-constraints
+        mutability:
+          BucketEncryption: review-required
+          VersioningConfiguration: review-required
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-temporary-images
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+            ExpirationInDays: 2
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 2
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Project
+          Value: metaglasses
+        - Key: Component
+          Value: pairing-images
+
+  PairingImagesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Rejects accidental non-TLS object access before IAM policy evaluation.
+        must:
+          - TLS deny must not be removed.
+        mutable: review-required
+    Properties:
+      Bucket: !Ref PairingImagesBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt PairingImagesBucket.Arn
+              - !Sub "${PairingImagesBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+Outputs:
+  PairingImagesBucketName:
+    Description: Private bucket name for pairing image objects.
+    Value: !Ref PairingImagesBucket
+  PairingImagesBucketArn:
+    Description: Private bucket ARN for the future API instance role.
+    Value: !GetAtt PairingImagesBucket.Arn

@@ -9,5 +9,7 @@ __pycache__
 .env.*
 config
 docs
-supabase
+supabase/*
+!supabase/functions/
+!supabase/functions/**
 tests

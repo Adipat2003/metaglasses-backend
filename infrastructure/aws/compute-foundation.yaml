@@ -1,0 +1,251 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "MetaGlasses compute foundation: private-by-security-group EC2, ECR, and SSM deployment access."
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: one SSM-managed EC2 API instance pulls immutable images from ECR
+    must:
+      - No SSH or public API ingress is permitted before a TLS endpoint is approved.
+      - The API uses Cognito JWTs, Aurora IAM authentication, and private S3 objects.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  ApiSubnetId:
+    Type: AWS::EC2::Subnet::Id
+  DatabaseSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  DatabaseClusterResourceId:
+    Type: String
+  PairingImagesBucketName:
+    Type: String
+  PairingImagesBucketArn:
+    Type: String
+  NvidiaSecretArn:
+    Type: String
+  DatabaseHost:
+    Type: String
+  CognitoUserPoolId:
+    Type: String
+  CognitoAppClientId:
+    Type: String
+  AmiId:
+    Type: AWS::EC2::Image::Id
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues: [t3.small]
+
+Resources:
+  ApiSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Keeps the API unreachable until a TLS load balancer and hostname are approved.
+        must: [No inbound rules, outbound is required for AWS services and NVIDIA.]
+        mutable: change-with-constraints
+    Properties:
+      GroupDescription: MetaGlasses API egress and database access.
+      VpcId: !Ref VpcId
+
+  DatabaseIngressFromApi:
+    Type: AWS::EC2::SecurityGroupIngress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allows PostgreSQL only from the API security group.
+        must: [Never replace this security-group source with a CIDR.]
+        mutable: review-required
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref ApiSecurityGroup
+
+  ApiRepository:
+    Type: AWS::ECR::Repository
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Stores immutable API images built by GitHub Actions.
+        must: [Images must be immutable and scanned on push.]
+        mutable: review-required
+    Properties:
+      ImageScanningConfiguration: { ScanOnPush: true }
+      ImageTagMutability: IMMUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"Keep the newest ten images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}'
+
+  ApiRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Gives the EC2 workload only runtime access to its image, database user, images, and NVIDIA secret.
+        must: [No static credentials and no RDS master secret access.]
+        mutable: review-required
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: RuntimeAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecr:BatchCheckLayerAvailability, ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+                Resource: !GetAtt ApiRepository.Arn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub "${PairingImagesBucketArn}/*"
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref NvidiaSecretArn
+              - Effect: Allow
+                Action: rds-db:connect
+                Resource: !Sub "arn:${AWS::Partition}:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${DatabaseClusterResourceId}/metaglasses_api"
+
+  ApiInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: { Roles: [!Ref ApiRole] }
+
+  ApiLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Pins secure EC2 bootstrap settings for the single API instance.
+        must: [IMDSv2 is required, container credential hop limit is two, root disk is encrypted.]
+        mutable: review-required
+    Properties:
+      LaunchTemplateData:
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs: { Encrypted: true, VolumeSize: 20, VolumeType: gp3 }
+        IamInstanceProfile: { Name: !Ref ApiInstanceProfile }
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        MetadataOptions: { HttpTokens: required, HttpPutResponseHopLimit: 2 }
+        UserData:
+          Fn::Base64:
+            Fn::Sub: |
+              #!/bin/bash
+              set -eu
+              dnf install -y docker
+              systemctl enable --now docker
+              mkdir -p /opt/metaglasses
+              cat >/opt/metaglasses/runtime.env <<'EOF'
+              APP_ENV=aws
+              AWS_REGION=${AWS::Region}
+              COGNITO_USER_POOL_ID=${CognitoUserPoolId}
+              COGNITO_APP_CLIENT_ID=${CognitoAppClientId}
+              DATABASE_HOST=${DatabaseHost}
+              DATABASE_PORT=5432
+              DATABASE_NAME=metaglasses
+              PAIRING_IMAGE_BUCKET=${PairingImagesBucketName}
+              NVIDIA_SECRET_ARN=${NvidiaSecretArn}
+              NVIDIA_MODEL=meta/llama-3.2-90b-vision-instruct
+              NVIDIA_VIDEO_MODEL=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+              NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+              EOF
+              chmod 600 /opt/metaglasses/runtime.env
+              cat >/usr/local/bin/metaglasses-cleanup <<'EOF'
+              #!/bin/bash
+              set -eu
+              test -f /opt/metaglasses/image || exit 0
+              docker run --rm --env-file /opt/metaglasses/runtime.env "$(cat /opt/metaglasses/image)" run --allow-env --allow-net supabase/functions/cleanup-pairing-images/index.ts
+              EOF
+              chmod 700 /usr/local/bin/metaglasses-cleanup
+              cat >/etc/systemd/system/metaglasses-cleanup.timer <<'EOF'
+              [Timer]
+              OnBootSec=2min
+              OnUnitActiveSec=1min
+              [Install]
+              WantedBy=timers.target
+              EOF
+              cat >/etc/systemd/system/metaglasses-cleanup.service <<'EOF'
+              [Service]
+              Type=oneshot
+              ExecStart=/usr/local/bin/metaglasses-cleanup
+              EOF
+              systemctl enable --now metaglasses-cleanup.timer
+
+  ApiInstance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Single-environment API host managed through SSM rather than SSH.
+        must: [No key pair and no inbound rules.]
+        mutable: review-required
+    Properties:
+      LaunchTemplate: { LaunchTemplateId: !Ref ApiLaunchTemplate, Version: !GetAtt ApiLaunchTemplate.LatestVersionNumber }
+      SubnetId: !Ref ApiSubnetId
+      SecurityGroupIds: [!Ref ApiSecurityGroup]
+      Tags:
+        - Key: Name
+          Value: metaglasses-api
+
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Lets the repository deploy without a long-lived AWS access key.
+        must: [Only GitHub Actions tokens for the main branch may assume the deploy role.]
+        mutable: review-required
+    Properties:
+      ClientIdList: [sts.amazonaws.com]
+      Url: https://token.actions.githubusercontent.com
+
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Separates CI image publishing and SSM deployment from the EC2 runtime role.
+        must: [Trust must stay limited to Adipat2003/metaglasses-backend main branch.]
+        mutable: review-required
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Federated: !Ref GitHubOidcProvider }
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals: { token.actions.githubusercontent.com:aud: sts.amazonaws.com }
+              StringLike: { token.actions.githubusercontent.com:sub: repo:Adipat2003/metaglasses-backend:ref:refs/heads/main }
+      Policies:
+        - PolicyName: DeployApiImage
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action: [ecr:BatchCheckLayerAvailability, ecr:CompleteLayerUpload, ecr:InitiateLayerUpload, ecr:PutImage, ecr:UploadLayerPart]
+                Resource: !GetAtt ApiRepository.Arn
+              - Effect: Allow
+                Action: [ssm:SendCommand]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${ApiInstance}"
+              - Effect: Allow
+                Action: [ssm:GetCommandInvocation]
+                Resource: "*"
+              - Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*"
+
+Outputs:
+  ApiInstanceId: { Description: SSM deployment target, Value: !Ref ApiInstance }
+  ApiRepositoryUri: { Description: ECR push target, Value: !GetAtt ApiRepository.RepositoryUri }
+  ApiRoleArn: { Description: EC2 runtime role, Value: !GetAtt ApiRole.Arn }
+  GitHubDeployRoleArn: { Description: GitHub Actions OIDC deployment role, Value: !GetAtt GitHubDeployRole.Arn }

@@ -18,6 +18,14 @@ def test_environment_templates_are_centralized() -> None:
     assert not (ROOT / "supabase" / "oauth.env.example").exists()
 
 
+def test_aws_runtime_template_has_one_pairing_image_bucket() -> None:
+    template = (ROOT / "config" / "env" / "edge-functions.env.example").read_text(
+        encoding="utf-8"
+    )
+
+    assert template.count("PAIRING_IMAGE_BUCKET=") == 1
+
+
 def test_local_supabase_enables_google_and_apple_with_environment_credentials() -> None:
     config_path = ROOT / "supabase" / "config.toml"
     config = tomllib.loads(config_path.read_text(encoding="utf-8"))
@@ -36,7 +44,7 @@ def test_local_supabase_enables_google_and_apple_with_environment_credentials() 
     assert apple["redirect_uri"] == "env(SUPABASE_AUTH_EXTERNAL_APPLE_REDIRECT_URI)"
 
 
-def test_edge_api_uses_explicit_authentication_and_permissive_cors() -> None:
+def test_api_uses_cognito_authentication_and_permissive_cors() -> None:
     config = tomllib.loads((ROOT / "supabase" / "config.toml").read_text(encoding="utf-8"))
     source = (ROOT / "supabase" / "functions" / "api" / "index.ts").read_text(
         encoding="utf-8"
@@ -44,9 +52,10 @@ def test_edge_api_uses_explicit_authentication_and_permissive_cors() -> None:
 
     assert config["functions"]["api"]["verify_jwt"] is False
     assert '"Access-Control-Allow-Origin": "*"' in source
-    assert 'fetch(`${supabaseUrl()}/auth/v1/user`' in source
-    assert 'requiredEnvironment("NVIDIA_API_KEY")' in source
-    assert "SUPABASE_SERVICE_ROLE_KEY" in source
+    assert 'CognitoJwtVerifier.create' in source
+    assert 'tokenUse: "access"' in source
+    assert 'NVIDIA_SECRET_ARN' in source
+    assert "SUPABASE_SERVICE_ROLE_KEY" not in source
     assert 'role: "system"' not in source
     assert "systemPrompt" not in source
 
@@ -106,15 +115,37 @@ def test_hosted_edge_api_does_not_limit_images_per_pairing() -> None:
     assert "return 'registered';" in migration
 
 
-def test_cd_deploys_supabase_trial_automatically_and_production_manually() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "cd.yml").read_text(encoding="utf-8")
+def test_cd_deploys_to_ec2_through_oidc_and_ssm() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "aws-deploy.yml").read_text(
+        encoding="utf-8"
+    )
 
-    assert "uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api" in workflow
-    assert "hxtdfghufjjmeltarffl.supabase.co/functions/v1/api" in workflow
-    assert "supabase@2.116.0 db push" in workflow
-    assert "supabase@2.116.0 functions deploy" in workflow
-    assert workflow.count(
-        "cp supabase/signing_keys.example.json supabase/signing_keys.json"
-    ) == 2
-    assert "github.event_name == 'workflow_dispatch'" in workflow
-    assert "build-push-action" not in workflow
+    assert "id-token: write" in workflow
+    assert "configure-aws-credentials" in workflow
+    assert "METAGLASSES_AWS_DEPLOY_ROLE_ARN" in workflow
+    assert "docker push" in workflow
+    assert "aws ssm send-command" in workflow
+    assert "aws ssm wait command-executed" in workflow
+    assert "127.0.0.1:8000:8000" in workflow
+    assert "supabase@2.116.0" not in workflow
+
+
+def test_aurora_migration_is_marked_after_its_first_successful_run() -> None:
+    migration = (ROOT / "supabase" / "functions" / "migrate.ts").read_text(encoding="utf-8")
+
+    assert "app.schema_migrations" in migration
+    assert "database_migration_skipped" in migration
+    assert "begin;" in migration
+    assert "commit;" in migration
+
+
+def test_compute_bootstrap_writes_non_secret_runtime_configuration() -> None:
+    template = (ROOT / "infrastructure" / "aws" / "compute-foundation.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "NVIDIA_SECRET_ARN=${NvidiaSecretArn}" in template
+    assert "DATABASE_HOST=${DatabaseHost}" in template
+    assert "COGNITO_USER_POOL_ID=${CognitoUserPoolId}" in template
+    assert "chmod 600 /opt/metaglasses/runtime.env" in template
+    assert not (ROOT / ".github" / "workflows" / "cd.yml").exists()

@@ -1,0 +1,279 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "MetaGlasses database foundation: private Aurora PostgreSQL with no public ingress."
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: one VPC, two isolated DB subnets, one Aurora writer
+    must:
+      - Database has no public network path.
+      - AWS manages the master password in Secrets Manager.
+
+Parameters:
+  VpcCidr:
+    Type: String
+    Default: 10.42.0.0/16
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/(1[6-9]|2[0-8])$"
+    ConstraintDescription: Must be an RFC 1918-compatible CIDR with a /16 to /28 prefix.
+
+Resources:
+  DatabaseVpc:
+    Type: AWS::EC2::VPC
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Dedicated network so DB stays isolated from future public API traffic.
+        must:
+          - CIDR must not overlap a network that will connect to this VPC.
+        mutable: review-required
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Project
+          Value: metaglasses
+        - Key: Component
+          Value: database
+
+  DatabaseSubnetA:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: First isolated subnet required by Aurora's multi-AZ subnet group.
+        must:
+          - Must not assign public IPv4 addresses.
+        mutable: review-required
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.42.16.0/20
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: metaglasses-database-a
+        - Key: Project
+          Value: metaglasses
+      VpcId: !Ref DatabaseVpc
+
+  DatabaseSubnetB:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Second isolated subnet required by Aurora's multi-AZ subnet group.
+        must:
+          - Must not assign public IPv4 addresses.
+        mutable: review-required
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: 10.42.32.0/20
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: metaglasses-database-b
+        - Key: Project
+          Value: metaglasses
+      VpcId: !Ref DatabaseVpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Gives the private-by-security-group API instance outbound access to AWS and NVIDIA.
+        must:
+          - It must never create a public route for database subnets.
+        mutable: review-required
+    Properties:
+      Tags:
+        - Key: Project
+          Value: metaglasses
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Attaches the dedicated egress gateway to the application VPC.
+        must:
+          - Only the API subnet route table may target this gateway.
+        mutable: review-required
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref DatabaseVpc
+
+  ApiPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Isolates the API egress route from the database subnet group.
+        must:
+          - Database subnets must not be associated with this route table.
+        mutable: review-required
+    Properties:
+      VpcId: !Ref DatabaseVpc
+
+  ApiDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Lets the API instance reach SSM, ECR, Secrets Manager, S3, and NVIDIA.
+        must:
+          - No inbound database access is created by this route.
+        mutable: review-required
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref ApiPublicRouteTable
+
+  ApiSubnet:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Hosts the single EC2 API instance without exposing database subnets.
+        must:
+          - Security groups must keep all inbound traffic closed until a TLS endpoint is approved.
+        mutable: review-required
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.42.0.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: metaglasses-api
+        - Key: Project
+          Value: metaglasses
+      VpcId: !Ref DatabaseVpc
+
+  ApiSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Applies public egress only to the API subnet.
+        must:
+          - Database subnets remain on their isolated implicit route tables.
+        mutable: review-required
+    Properties:
+      RouteTableId: !Ref ApiPublicRouteTable
+      SubnetId: !Ref ApiSubnet
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Pins Aurora to isolated subnets in two availability zones.
+        must:
+          - Database subnets must never be changed to public subnets.
+        mutable: review-required
+    Properties:
+      DBSubnetGroupDescription: Isolated subnets for the MetaGlasses database.
+      SubnetIds:
+        - !Ref DatabaseSubnetA
+        - !Ref DatabaseSubnetB
+      Tags:
+        - Key: Project
+          Value: metaglasses
+        - Key: Component
+          Value: database
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Starts deny-by-default; the API security group is added in the compute phase.
+        must:
+          - Never allow CIDR-based database ingress.
+          - Only the future API security group may use TCP 5432.
+        mutable: change-with-constraints
+    Properties:
+      GroupDescription: Database access for MetaGlasses application resources only.
+      SecurityGroupEgress: []
+      VpcId: !Ref DatabaseVpc
+      Tags:
+        - Key: Name
+          Value: metaglasses-database
+        - Key: Project
+          Value: metaglasses
+
+  DatabaseCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Managed PostgreSQL preserves the existing relational schema and stored procedures.
+        must:
+          - Must stay private, encrypted, and deletion-protected.
+          - Master password must remain RDS-managed and never enter source control.
+        mutable: change-with-constraints
+        mutability:
+          Engine: must-never-change
+          EngineVersion: review-required
+          MasterUsername: must-never-change
+    Properties:
+      BackupRetentionPeriod: 7
+      CopyTagsToSnapshot: true
+      DatabaseName: metaglasses
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      DeletionProtection: true
+      EnableHttpEndpoint: true
+      EnableIAMDatabaseAuthentication: true
+      EnableCloudwatchLogsExports:
+        - postgresql
+      Engine: aurora-postgresql
+      EngineVersion: "17.9"
+      ManageMasterUserPassword: true
+      MasterUsername: dbadmin
+      StorageEncrypted: true
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 0.5
+        MaxCapacity: 2
+      VpcSecurityGroupIds:
+        - !Ref DatabaseSecurityGroup
+      Tags:
+        - Key: Project
+          Value: metaglasses
+        - Key: Component
+          Value: database
+
+  DatabaseWriter:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: One serverless writer is enough for the requested single environment.
+        must:
+          - Must remain non-public.
+        mutable: change-with-constraints
+        mutability:
+          DBInstanceClass: review-required
+    Properties:
+      AutoMinorVersionUpgrade: true
+      DBClusterIdentifier: !Ref DatabaseCluster
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      PubliclyAccessible: false
+      Tags:
+        - Key: Project
+          Value: metaglasses
+        - Key: Component
+          Value: database
+
+Outputs:
+  DatabaseClusterEndpoint:
+    Description: Private writer endpoint for the future API instance.
+    Value: !GetAtt DatabaseCluster.Endpoint.Address
+  DatabasePort:
+    Description: PostgreSQL port for the future API instance.
+    Value: !GetAtt DatabaseCluster.Endpoint.Port
+  DatabaseMasterSecretArn:
+    Description: RDS-managed Secrets Manager secret ARN. The secret value is not an output.
+    Value: !GetAtt DatabaseCluster.MasterUserSecret.SecretArn
+  DatabaseSecurityGroupId:
+    Description: Security group to reference from the future API instance security group.
+    Value: !Ref DatabaseSecurityGroup
+  DatabaseVpcId:
+    Description: VPC ID for the future API compute resources.
+    Value: !Ref DatabaseVpc
+  ApiSubnetId:
+    Description: Public-egress subnet reserved for the private-by-security-group API instance.
+    Value: !Ref ApiSubnet
