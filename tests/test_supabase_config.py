@@ -148,4 +148,8 @@ def test_compute_bootstrap_writes_non_secret_runtime_configuration() -> None:
     assert "DATABASE_HOST=${DatabaseHost}" in template
     assert "COGNITO_USER_POOL_ID=${CognitoUserPoolId}" in template
     assert "chmod 600 /opt/metaglasses/runtime.env" in template
+    assert (
+        "repo:Adipat2003@99374679/metaglasses-backend@1357463095:ref:refs/heads/main"
+        in template
+    )
     assert not (ROOT / ".github" / "workflows" / "cd.yml").exists()
