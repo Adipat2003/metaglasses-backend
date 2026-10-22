@@ -402,19 +402,38 @@ async function authenticate(request: Request): Promise<AuthenticatedUser> {
       throw new Error("invalid subject");
     }
     return { id: payload.sub };
-  } catch {
-    throw new ApiError(401, "Missing or invalid access token.", true, "auth_rejected");
+  } catch (error) {
+    throw new ApiError(401, "Missing or invalid access token.", true, "auth_rejected", {
+      auth_failure_type: jwtVerificationFailureType(error),
+    });
   }
 }
 
 const tokenPattern = /^[0-9a-fA-F]{32}$/;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const jwtVerificationErrorTypes = new Set([
+  "FetchError",
+  "JwksNotAvailableInCacheError",
+  "JwksValidationError",
+  "JwtExpiredError",
+  "JwtInvalidClaimError",
+  "JwtInvalidIssuerError",
+  "JwtInvalidSignatureError",
+  "JwtNotBeforeError",
+  "JwtParseError",
+  "KidNotFoundInJwksError",
+]);
 const pairingStates = new Set<PairingState>([
   "idle",
   "listening",
   "thinking",
   "speaking",
 ]);
+
+function jwtVerificationFailureType(error: unknown): string {
+  const errorType = error instanceof Error ? error.name : "UnknownError";
+  return jwtVerificationErrorTypes.has(errorType) ? errorType : "unknown";
+}
 
 function validateToken(value: unknown): string {
   if (typeof value !== "string" || !tokenPattern.test(value)) {
