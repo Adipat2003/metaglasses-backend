@@ -404,7 +404,7 @@ async function authenticate(request: Request): Promise<AuthenticatedUser> {
     return { id: payload.sub };
   } catch (error) {
     throw new ApiError(401, "Missing or invalid access token.", true, "auth_rejected", {
-      auth_failure_type: jwtVerificationFailureType(error),
+      ...jwtVerificationFailureContext(error),
     });
   }
 }
@@ -430,9 +430,16 @@ const pairingStates = new Set<PairingState>([
   "speaking",
 ]);
 
-function jwtVerificationFailureType(error: unknown): string {
+function jwtVerificationFailureContext(error: unknown): Record<string, string> {
   const errorType = error instanceof Error ? error.name : "UnknownError";
-  return jwtVerificationErrorTypes.has(errorType) ? errorType : "unknown";
+  const context: Record<string, string> = {
+    auth_failure_type: jwtVerificationErrorTypes.has(errorType) ? errorType : "unknown",
+    auth_failure_name: errorType.slice(0, 200),
+  };
+  if (error instanceof Error && error.message) {
+    context.auth_failure_message = redactedErrorText(error.message).slice(0, 500);
+  }
+  return context;
 }
 
 function validateToken(value: unknown): string {
