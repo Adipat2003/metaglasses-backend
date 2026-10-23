@@ -111,8 +111,19 @@ a normal safe error response. Local development retains the five-minute provider
    group to view API status and latency records. Request bodies, authorization headers, and query
    strings are not logged there.
 
-## Operational gap
+## Audit logging
 
-CloudFormation stack events provide deployment history, but this AWS account currently has no
-CloudTrail trail. Create an organization-appropriate CloudTrail trail before treating this as a
-production audit record.
+The `metaglasses-audit` stack creates a multi-Region CloudTrail that records all AWS management
+events, such as CloudFormation deployments, security-group changes, and IAM or Secrets Manager
+configuration actions. It writes those records to a private, encrypted, versioned S3 bucket for
+one year and enables log-file validation, which helps detect missing or modified log files.
+
+It intentionally does not capture high-volume data events, such as individual S3 object reads and
+writes. Those events have separate costs and can contain more operational detail, so enable them
+only after an explicit cost and privacy review. Application request status and latency remain in
+the API Gateway CloudWatch access log group.
+
+To validate the trail in the AWS console, open **CloudTrail** in `us-east-1`, choose **Trails**,
+and open `metaglasses-audit-trail`. Confirm that logging is on, multi-Region trail is enabled, and
+log file validation is enabled. Choose its S3 bucket link to view delivered log objects. Initial
+log delivery can take several minutes; validation digest files can take up to about one hour.

@@ -1,0 +1,125 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "MetaGlasses audit foundation: multi-Region management-event CloudTrail with private validated S3 storage."
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: Multi-Region CloudTrail delivers management-event audit logs to a private S3 bucket.
+    must:
+      - CloudTrail must remain enabled with log-file validation.
+      - The audit log bucket must remain private, encrypted, versioned, and TLS-only.
+      - Data-event capture requires an explicit cost and privacy review before it is enabled.
+
+Resources:
+  AuditLogBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Holds durable CloudTrail audit logs outside the application runtime.
+        mutable: false
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: retain-audit-logs-for-one-year
+            Status: Enabled
+            ExpirationInDays: 365
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 365
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Project
+          Value: metaglasses
+        - Key: Component
+          Value: audit
+
+  AuditLogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allows only the CloudTrail service to write account audit records, while rejecting HTTP access.
+        mutable: false
+    Properties:
+      Bucket: !Ref AuditLogBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt AuditLogBucket.Arn
+              - !Sub "${AuditLogBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - Sid: AllowCloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt AuditLogBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${AWS::StackName}-trail"
+          - Sid: AllowCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "${AuditLogBucket.Arn}/cloudtrail/AWSLogs/${AWS::AccountId}/*"
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${AWS::StackName}-trail"
+
+  AuditTrail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: AuditLogBucketPolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Provides a durable, account-wide audit history for AWS management actions.
+        mutable: false
+    Properties:
+      TrailName: !Sub "${AWS::StackName}-trail"
+      EnableLogFileValidation: true
+      IncludeGlobalServiceEvents: true
+      IsLogging: true
+      IsMultiRegionTrail: true
+      S3BucketName: !Ref AuditLogBucket
+      S3KeyPrefix: cloudtrail
+      EventSelectors:
+        - IncludeManagementEvents: true
+          ReadWriteType: All
+      Tags:
+        - Key: Project
+          Value: metaglasses
+        - Key: Component
+          Value: audit
+
+Outputs:
+  AuditTrailArn:
+    Description: ARN of the account audit trail.
+    Value: !GetAtt AuditTrail.Arn
+
+  AuditLogBucketName:
+    Description: Private S3 bucket storing CloudTrail audit logs.
+    Value: !Ref AuditLogBucket
