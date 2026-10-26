@@ -191,7 +191,7 @@ docker run --rm --volume "$PWD:/work" --workdir /work \
   supabase/functions/api/index.ts \
   supabase/functions/cleanup-pairing-images/index.ts
 docker run --rm --volume "$PWD:/work" --workdir /work \
-  denoland/deno:2.5.2 deno test --config supabase/functions/deno.json \
+  denoland/deno:2.5.2 deno test --allow-env --config supabase/functions/deno.json \
   supabase/functions/api/nvidia_test.ts \
   supabase/functions/api/providers_test.ts \
   supabase/functions/api/task_plan_test.ts
