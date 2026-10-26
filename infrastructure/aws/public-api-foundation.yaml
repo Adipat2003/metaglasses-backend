@@ -1,0 +1,303 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "MetaGlasses public API: API Gateway HTTPS routes privately to the EC2 API through a VPC Link."
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: public API Gateway -> VPC Link -> internal ALB -> private-by-security-group EC2 API
+    must:
+      - API Gateway is the only internet-facing component.
+      - The ALB and API instance must not have CIDR-based public ingress.
+      - The execute-api hostname is used until a custom domain is intentionally purchased.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  ApiInstanceId:
+    Type: AWS::EC2::Instance::Id
+  ApiSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  PrivateIntegrationSubnetACidr:
+    Type: String
+    Default: 10.42.48.0/20
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/(1[6-9]|2[0-8])$"
+    ConstraintDescription: Must be a non-overlapping RFC 1918 subnet inside the application VPC.
+  PrivateIntegrationSubnetBCidr:
+    Type: String
+    Default: 10.42.64.0/20
+    AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/(1[6-9]|2[0-8])$"
+    ConstraintDescription: Must be a non-overlapping RFC 1918 subnet inside the application VPC.
+
+Resources:
+  PrivateIntegrationSubnetA:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Gives the internal ALB and VPC Link isolated private addresses in the first AZ.
+        must: [Must not assign public IPv4 addresses or use the public API route table.]
+        mutable: review-required
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Ref PrivateIntegrationSubnetACidr
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: metaglasses-private-integration-a
+        - Key: Project
+          Value: metaglasses
+      VpcId: !Ref VpcId
+
+  PrivateIntegrationSubnetB:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Gives the internal ALB and VPC Link isolated private addresses in a second AZ.
+        must: [Must not assign public IPv4 addresses or use the public API route table.]
+        mutable: review-required
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Ref PrivateIntegrationSubnetBCidr
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: metaglasses-private-integration-b
+        - Key: Project
+          Value: metaglasses
+      VpcId: !Ref VpcId
+
+  VpcLinkSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Limits API Gateway VPC Link ENIs to the internal ALB listener only.
+        must: [No inbound rules and no egress except TCP 8000 to the internal ALB.]
+        mutable: change-with-constraints
+    Properties:
+      GroupDescription: MetaGlasses API Gateway VPC Link egress.
+      SecurityGroupEgress: []
+      VpcId: !Ref VpcId
+
+  InternalLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allows only VPC Link traffic to the internal ALB and only ALB traffic to EC2.
+        must: [No CIDR ingress and no egress except TCP 8000 to the API security group.]
+        mutable: change-with-constraints
+    Properties:
+      GroupDescription: MetaGlasses internal API load balancer traffic.
+      SecurityGroupEgress: []
+      VpcId: !Ref VpcId
+
+  VpcLinkEgressToInternalLoadBalancer:
+    Type: AWS::EC2::SecurityGroupEgress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allows VPC Link ENIs to reach only the internal ALB listener after both groups exist.
+        must: [Keep TCP 8000 and the internal ALB security-group destination.]
+        mutable: review-required
+    Properties:
+      GroupId: !Ref VpcLinkSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8000
+      ToPort: 8000
+      DestinationSecurityGroupId: !Ref InternalLoadBalancerSecurityGroup
+
+  InternalLoadBalancerIngressFromVpcLink:
+    Type: AWS::EC2::SecurityGroupIngress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allows only API Gateway VPC Link ENIs to reach the internal ALB listener.
+        must: [Keep TCP 8000 and the VPC Link security-group source.]
+        mutable: review-required
+    Properties:
+      GroupId: !Ref InternalLoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8000
+      ToPort: 8000
+      SourceSecurityGroupId: !Ref VpcLinkSecurityGroup
+
+  InternalLoadBalancerEgressToApi:
+    Type: AWS::EC2::SecurityGroupEgress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Allows the internal ALB to reach only the API instance listener.
+        must: [Keep TCP 8000 and the API security-group destination.]
+        mutable: review-required
+    Properties:
+      GroupId: !Ref InternalLoadBalancerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8000
+      ToPort: 8000
+      DestinationSecurityGroupId: !Ref ApiSecurityGroupId
+
+  ApiIngressFromInternalLoadBalancer:
+    Type: AWS::EC2::SecurityGroupIngress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Permits the existing API instance to accept requests only from the internal ALB.
+        must: [Never replace the ALB security-group source with a CIDR.]
+        mutable: review-required
+    Properties:
+      GroupId: !Ref ApiSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 8000
+      ToPort: 8000
+      SourceSecurityGroupId: !Ref InternalLoadBalancerSecurityGroup
+
+  InternalLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Provides the VPC Link target while keeping the API server off the public internet.
+        must: [Must stay internal and use both private integration subnets.]
+        mutable: review-required
+    Properties:
+      IpAddressType: ipv4
+      Scheme: internal
+      SecurityGroups: [!Ref InternalLoadBalancerSecurityGroup]
+      Subnets: [!Ref PrivateIntegrationSubnetA, !Ref PrivateIntegrationSubnetB]
+      Type: application
+
+  ApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Routes only healthy HTTP API traffic to the one EC2 instance in this single environment.
+        must: [Health checks must remain on the unauthenticated /healthz endpoint.]
+        mutable: review-required
+    Properties:
+      HealthCheckIntervalSeconds: 15
+      HealthCheckPath: /healthz
+      HealthCheckProtocol: HTTP
+      HealthyThresholdCount: 2
+      Matcher: { HttpCode: "200" }
+      Port: 8000
+      Protocol: HTTP
+      TargetType: instance
+      Targets:
+        - Id: !Ref ApiInstanceId
+          Port: 8000
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref VpcId
+
+  InternalLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Forwards the sole internal listener to the health-checked API target group.
+        must: [Must forward only to ApiTargetGroup on TCP 8000.]
+        mutable: review-required
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ApiTargetGroup
+      LoadBalancerArn: !Ref InternalLoadBalancer
+      Port: 8000
+      Protocol: HTTP
+
+  ApiGatewayVpcLink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Carries API Gateway traffic into the private VPC without public EC2 ingress.
+        must: [Subnets and security groups are immutable after creation; replacement requires an integration update.]
+        mutable: review-required
+    Properties:
+      Name: !Sub "${AWS::StackName}-vpc-link"
+      SecurityGroupIds: [!Ref VpcLinkSecurityGroup]
+      SubnetIds: [!Ref PrivateIntegrationSubnetA, !Ref PrivateIntegrationSubnetB]
+
+  HttpApiAccessLogs:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Retains bounded API access evidence without logging request bodies, headers, or query strings.
+        must: [Keep retention finite and preserve logs if the stack is replaced or deleted.]
+        mutable: change-with-constraints
+        mutability:
+          RetentionInDays: review-required
+    Properties:
+      RetentionInDays: 30
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Provides the AWS-managed public HTTPS hostname without a custom domain or certificate.
+        must: [Default execute-api endpoint must remain enabled until a replacement custom domain is live.]
+        mutable: review-required
+    Properties:
+      Description: Public HTTPS entry point for the MetaGlasses REST API.
+      DisableExecuteApiEndpoint: false
+      Name: !Sub "${AWS::StackName}-http"
+      ProtocolType: HTTP
+
+  HttpProxyIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Proxies every REST request through VPC Link to the internal ALB without changing the API contract.
+        must: [Gateway timeout stays at 30 seconds, app provider calls stop at 20 seconds, and the request path must exclude the stage prefix.]
+        mutable: review-required
+    Properties:
+      ApiId: !Ref HttpApi
+      ConnectionId: !Ref ApiGatewayVpcLink
+      ConnectionType: VPC_LINK
+      IntegrationMethod: ANY
+      IntegrationType: HTTP_PROXY
+      IntegrationUri: !Ref InternalLoadBalancerListener
+      PayloadFormatVersion: "1.0"
+      RequestParameters:
+        "overwrite:path": "$request.path"
+      TimeoutInMillis: 30000
+
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Sends all paths and methods to the existing router so route behavior stays in application code.
+        must: [Authorization stays in the Cognito-verifying application until API Gateway authorization is intentionally introduced.]
+        mutable: review-required
+    Properties:
+      ApiId: !Ref HttpApi
+      AuthorizationType: NONE
+      RouteKey: $default
+      Target: !Join ["/", [integrations, !Ref HttpProxyIntegration]]
+
+  DefaultStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Makes the execute-api URL serve the application at its root and emits bounded access logs.
+        must: [Access logs must contain requestId but no headers, query strings, request bodies, or credentials.]
+        mutable: review-required
+    Properties:
+      AccessLogSettings:
+        DestinationArn: !GetAtt HttpApiAccessLogs.Arn
+        Format: >-
+          {"request_id":"$context.requestId","route":"$context.routeKey","status":"$context.status","duration_ms":"$context.responseLatency","source_ip":"$context.identity.sourceIp"}
+      ApiId: !Ref HttpApi
+      AutoDeploy: true
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: true
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+      StageName: $default
+
+Outputs:
+  HttpApiUrl:
+    Description: Public AWS-managed HTTPS base URL for the MetaGlasses API.
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
+  HttpApiId:
+    Description: API Gateway HTTP API identifier.
+    Value: !Ref HttpApi
+  InternalLoadBalancerArn:
+    Description: Private ALB used only by API Gateway VPC Link.
+    Value: !Ref InternalLoadBalancer
+  HttpApiAccessLogGroup:
+    Description: CloudWatch Logs group for public API access logs.
+    Value: !Ref HttpApiAccessLogs

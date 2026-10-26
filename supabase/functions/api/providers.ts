@@ -1,4 +1,10 @@
-const providerTimeoutMilliseconds = 5 * 60_000;
+function providerTimeoutMilliseconds(): number {
+  try {
+    return Deno.env.get("APP_ENV") === "aws" ? 20_000 : 5 * 60_000;
+  } catch {
+    return 5 * 60_000;
+  }
+}
 const maximumInlineImageBytes = 16 * 1024 * 1024;
 
 const openAiCompatibleBaseUrls = {
@@ -207,7 +213,7 @@ async function inlineImageData(
     let response: Response;
     try {
       response = await fetcher(image.url, {
-        signal: AbortSignal.timeout(providerTimeoutMilliseconds),
+        signal: AbortSignal.timeout(providerTimeoutMilliseconds()),
       });
     } catch (error) {
       throw connectionError(provider, model, error, "The image could not be downloaded.");
@@ -363,7 +369,7 @@ async function requestJson(
   try {
     response = await fetcher(url, {
       ...init,
-      signal: init.signal ?? AbortSignal.timeout(providerTimeoutMilliseconds),
+      signal: init.signal ?? AbortSignal.timeout(providerTimeoutMilliseconds()),
     });
   } catch (error) {
     throw connectionError(provider, model, error);

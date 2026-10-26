@@ -1,8 +1,9 @@
-# Deployment and operations
+# Legacy Supabase deployment and operations
 
-The hosted API is deployed exclusively to Supabase Edge Functions. Trial deployment follows
-every successful `main` CI run. Production deployment is a manual GitHub Actions operation
-guarded by the `production` GitHub environment.
+The active single environment is deployed to AWS. See [AWS deployment and operations](aws-deployment.md)
+for the deployed architecture, commands, public endpoint, and console-validation steps. The
+Supabase instructions below are retained only as historical reference while the old project is
+decommissioned.
 
 ## Environment map
 
