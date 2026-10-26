@@ -5,10 +5,10 @@ Metadata:
   AWSToolsMetrics:
     AWSAgentToolkit: aws-cloudformation@3
   com.aws.cloudformation.Context:
-    arch: one SSM-managed EC2 API instance pulls immutable images from ECR
+    arch: one SSM-managed EC2 API instance pulls immutable images from ECR and connects to private PostgreSQL through IAM authentication
     must:
       - No SSH or public API ingress is permitted before a TLS endpoint is approved.
-      - The API uses Cognito JWTs, Aurora IAM authentication, and private S3 objects.
+      - The API uses Cognito JWTs, PostgreSQL IAM authentication, and private S3 objects.
 
 Parameters:
   VpcId:
@@ -17,7 +17,7 @@ Parameters:
     Type: AWS::EC2::Subnet::Id
   DatabaseSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
-  DatabaseClusterResourceId:
+  DatabaseResourceId:
     Type: String
   PairingImagesBucketName:
     Type: String
@@ -112,7 +112,7 @@ Resources:
                 Resource: !Ref NvidiaSecretArn
               - Effect: Allow
                 Action: rds-db:connect
-                Resource: !Sub "arn:${AWS::Partition}:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${DatabaseClusterResourceId}/metaglasses_api"
+                Resource: !Sub "arn:${AWS::Partition}:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${DatabaseResourceId}/metaglasses_api"
 
   ApiInstanceProfile:
     Type: AWS::IAM::InstanceProfile

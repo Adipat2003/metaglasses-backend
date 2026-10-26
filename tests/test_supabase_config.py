@@ -158,6 +158,49 @@ def test_compute_bootstrap_writes_non_secret_runtime_configuration() -> None:
     assert not (ROOT / ".github" / "workflows" / "cd.yml").exists()
 
 
+def test_aws_database_foundation_has_a_private_cost_optimized_rds_instance() -> None:
+    template = (ROOT / "infrastructure" / "aws" / "database-foundation.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CostOptimizedDatabase:" in template
+    assert "DBInstanceClass: db.t4g.micro" in template
+    assert "Engine: postgres" in template
+    assert "EnableIAMDatabaseAuthentication: true" in template
+    assert "MultiAZ: false" in template
+    assert "PubliclyAccessible: false" in template
+    assert "StorageEncrypted: true" in template
+    assert "DeletionProtection: true" in template
+    assert "DatabaseResourceId" in template
+
+
+def test_compute_iam_policy_targets_one_specific_database_resource() -> None:
+    template = (ROOT / "infrastructure" / "aws" / "compute-foundation.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "DatabaseResourceId:" in template
+    assert "${DatabaseResourceId}/metaglasses_api" in template
+    assert "DatabaseClusterResourceId" not in template
+
+
+def test_rds_bootstrap_uses_iam_only_application_authentication() -> None:
+    role_sql = (ROOT / "database" / "bootstrap" / "0001_create_application_role.sql").read_text(
+        encoding="utf-8"
+    )
+    grants_sql = (
+        ROOT / "database" / "bootstrap" / "0002_grant_application_access.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "create role metaglasses_api login" in role_sql
+    assert "grant rds_iam to metaglasses_api" in role_sql
+    assert "revoke create on schema public from public" in role_sql
+    assert "grant usage on schema app to metaglasses_api" in grants_sql
+    assert "grant select on table app.schema_migrations to metaglasses_api" in grants_sql
+    assert "grant execute on all functions in schema app to metaglasses_api" in grants_sql
+    assert "password" not in role_sql.lower()
+
+
 def test_aws_api_gateway_foundation_keeps_compute_private() -> None:
     template = (
         ROOT / "infrastructure" / "aws" / "public-api-foundation.yaml"

@@ -1,7 +1,8 @@
 # AWS deployment and operations
 
 MetaGlasses currently uses one AWS environment in `us-east-1`. No application data was migrated
-from Supabase: the Aurora database starts empty and the AWS Cognito user pool starts with no users.
+from Supabase: the RDS PostgreSQL database starts empty and the AWS Cognito user pool starts with
+no users.
 
 ## Architecture
 
@@ -11,10 +12,10 @@ client HTTPS
   -> VPC Link
   -> internal Application Load Balancer
   -> EC2 Deno container
-  -> Aurora PostgreSQL, Cognito, S3, Secrets Manager
+  -> RDS PostgreSQL, Cognito, S3, Secrets Manager
 ```
 
-Only API Gateway is internet-facing. The load balancer, EC2 instance, Aurora cluster, S3 bucket,
+Only API Gateway is internet-facing. The load balancer, EC2 instance, RDS instance, S3 bucket,
 and NVIDIA credential remain private. The default AWS URL avoids buying a domain or managing an
 ACM certificate.
 
@@ -24,7 +25,7 @@ ACM certificate.
 | --- | --- |
 | `metaglasses-auth` | Cognito user pool and mobile app client |
 | `metaglasses-storage` | Private pairing-image S3 bucket |
-| `metaglasses-database` | VPC, Aurora PostgreSQL, and database security group |
+| `metaglasses-database` | VPC, private RDS PostgreSQL, and database security group |
 | `metaglasses-compute` | EC2, ECR, SSM, runtime IAM role, and GitHub OIDC deploy role |
 | `metaglasses-public-api` | API Gateway, VPC Link, internal ALB, private subnets, and API access logs |
 
@@ -78,6 +79,17 @@ aws cloudformation validate-template \
 
 The public API stack consumes IDs from the existing database and compute stacks. Use a change set
 for any update so the planned AWS resource changes can be inspected before execution.
+
+## Database bootstrap and access
+
+The RDS instance is a single-AZ `db.t4g.micro` PostgreSQL 17.9 instance with 20 GiB gp3 storage,
+seven-day backups, encryption, deletion protection, and no public endpoint. The API authenticates
+as `metaglasses_api` with short-lived IAM database tokens. It has no direct table access: it can
+only execute the application functions in the private `app` schema and read the migration ledger.
+
+The one-time bootstrap scripts in `database/bootstrap/` create that role and grant its minimal
+permissions. `database/migrations/0001_initial.sql` is the AWS-native schema used by the API; it
+does not depend on Supabase Auth, Storage, or extensions.
 
 ## Deploy application code
 
