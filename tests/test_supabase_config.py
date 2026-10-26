@@ -158,6 +158,17 @@ def test_compute_bootstrap_writes_non_secret_runtime_configuration() -> None:
     assert not (ROOT / ".github" / "workflows" / "cd.yml").exists()
 
 
+def test_github_deploy_role_can_push_ecr_images() -> None:
+    template = (ROOT / "infrastructure" / "aws" / "compute-foundation.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        "ecr:BatchCheckLayerAvailability, ecr:BatchGetImage, ecr:CompleteLayerUpload"
+        in template
+    )
+
+
 def test_aws_database_foundation_has_a_private_cost_optimized_rds_instance() -> None:
     template = (ROOT / "infrastructure" / "aws" / "database-foundation.yaml").read_text(
         encoding="utf-8"
