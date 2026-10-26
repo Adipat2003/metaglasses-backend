@@ -191,9 +191,10 @@ docker run --rm --volume "$PWD:/work" --workdir /work \
   supabase/functions/api/index.ts \
   supabase/functions/cleanup-pairing-images/index.ts
 docker run --rm --volume "$PWD:/work" --workdir /work \
-  denoland/deno:2.5.2 deno test --config supabase/functions/deno.json \
+  denoland/deno:2.5.2 deno test --allow-env --config supabase/functions/deno.json \
   supabase/functions/api/nvidia_test.ts \
-  supabase/functions/api/providers_test.ts
+  supabase/functions/api/providers_test.ts \
+  supabase/functions/api/task_plan_test.ts
 ```
 
 Verify the primary Edge API:
@@ -228,6 +229,18 @@ the image-assisted chat check:
 
 ```bash
 EXPECT_CHAT=true bash scripts/smoke-edge-api.sh
+```
+
+Run the task-guidance smoke test only with a dedicated test user and pairing. It creates a plan,
+uploads one disposable image, invokes Claude and Nova, and stops the resulting task run. The
+explicit confirmation prevents accidental use against a personal glasses session:
+
+```bash
+TASK_GUIDANCE_TEST_CONFIRM=yes \
+EDGE_API_BASE="<API_BASE_URL>" \
+EDGE_API_ACCESS_TOKEN="<COGNITO_ACCESS_TOKEN>" \
+PAIRING_TOKEN="<32_HEX_CHARACTERS>" \
+bash scripts/smoke-task-guidance-api.sh
 ```
 
 ## Stop and clean up

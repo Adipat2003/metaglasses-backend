@@ -46,6 +46,10 @@ Deno.test("task plan input normalizes source instructions", () => {
   );
 });
 
+Deno.test("task plan rejects an empty instruction list", () => {
+  assertThrows(() => validateTaskPlanInput({ title: "Install bracket", steps: [] }));
+});
+
 Deno.test("model plan preserves the exact source ordering", () => {
   assert(
     validateModelPlan(validModelPlan(), sourcePlan.steps).steps.length === 2,
@@ -62,5 +66,11 @@ Deno.test("model plan rejects rewritten canonical instructions", () => {
 Deno.test("model plan rejects reordering", () => {
   const modelPlan = validModelPlan();
   (modelPlan.steps as Array<Record<string, unknown>>).reverse();
+  assertThrows(() => validateModelPlan(modelPlan, sourcePlan.steps));
+});
+
+Deno.test("model plan requires clarification questions when clarification is needed", () => {
+  const modelPlan = validModelPlan();
+  modelPlan.needsUserClarification = true;
   assertThrows(() => validateModelPlan(modelPlan, sourcePlan.steps));
 });

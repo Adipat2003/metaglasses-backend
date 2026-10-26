@@ -2,10 +2,10 @@
 
 ## Status and decision
 
-This document defines the target architecture for user-authored task plans and live visual
-guidance. The first backend slice implements structured-list plan creation, Claude validation,
-review, approval, and task-run creation. Free-form parsing, commands, media ingestion, and visual
-inference remain planned work.
+This document defines the architecture for user-authored task plans and live visual guidance. The
+current backend implements structured-list plan creation, Claude validation, review, approval,
+task-run commands, image-backed inference windows, and Nova observation. Free-form parsing and
+native video upload remain planned work.
 
 The plan-validation model is **Claude Haiku 5.5** through the US geographic Bedrock inference
 profile:
@@ -210,6 +210,18 @@ pause | resume | repeat | confirm | skip | back | correct | stop
 ```
 
 The command is handled and recorded by code. It is never authority for a model to bypass the plan.
+
+### End-to-end smoke test
+
+Use `scripts/smoke-task-guidance-api.sh` with a dedicated Cognito test user and pairing. It
+activates the pairing, creates a short plan, validates it with Claude, approves it, starts a run,
+uploads a valid one-pixel PNG, queues a Nova observation, waits for the observation display update,
+repeats the current instruction, stops the run, and deletes the test image.
+
+The script requires explicit confirmation because it changes the selected pairing display and
+creates durable audit records until normal expiry. Set `TASK_GUIDANCE_TEST_CONFIRM=yes`,
+`EDGE_API_BASE`, `EDGE_API_ACCESS_TOKEN`, and `PAIRING_TOKEN`. A successful run ends with
+`Task-guidance smoke test passed.`
 
 ## State-machine contract
 
