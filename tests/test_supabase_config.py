@@ -287,6 +287,8 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     assert "create or replace function app.apply_task_run_command" in command_migration
     assert "create table app.task_inference_windows" in inference_migration
     assert "create_task_inference_window" in inference_migration
+    assert "as window" not in inference_migration
+    assert "as inference_window" in inference_migration
     assert "claim_task_inference_window" in observation_migration
     assert "complete_task_inference_window" in observation_migration
     assert "publish_task_run_start" in start_migration

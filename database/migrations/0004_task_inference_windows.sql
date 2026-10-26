@@ -52,10 +52,10 @@ declare
 begin
     perform pg_advisory_xact_lock(hashtextextended(p_task_run_id::text, 0));
 
-    select window.* into existing_window
-    from app.task_inference_windows as window
-    where window.task_run_id = p_task_run_id
-      and window.client_request_id = p_client_request_id;
+    select inference_window.* into existing_window
+    from app.task_inference_windows as inference_window
+    where inference_window.task_run_id = p_task_run_id
+      and inference_window.client_request_id = p_client_request_id;
     if found then
         return jsonb_build_object(
             'outcome', 'accepted',
@@ -97,9 +97,9 @@ begin
         return jsonb_build_object('outcome', 'invalid_media');
     end if;
 
-    select max(window.sequence_number) into latest_sequence
-    from app.task_inference_windows as window
-    where window.task_run_id = p_task_run_id;
+    select max(inference_window.sequence_number) into latest_sequence
+    from app.task_inference_windows as inference_window
+    where inference_window.task_run_id = p_task_run_id;
     if latest_sequence is not null and p_sequence_number <= latest_sequence then
         return jsonb_build_object('outcome', 'out_of_order');
     end if;
