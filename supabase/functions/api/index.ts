@@ -133,6 +133,9 @@ function normalizedRoute(path: string): string {
   if (/^\/v1\/task-runs\/[^/]+\/(commands|stop)$/.test(path)) {
     return "/v1/task-runs/:taskRunId/:action";
   }
+  if (/^\/v1\/task-runs\/[^/]+\/inference-windows$/.test(path)) {
+    return "/v1/task-runs/:taskRunId/inference-windows";
+  }
   return path;
 }
 
@@ -432,6 +435,21 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
             ${parameters.p_client_request_id as string},
             ${parameters.p_command as string},
             ${parameters.p_expected_state_version as number}
+          ) as result
+        `)[0].result as T;
+      }
+      case "edge_api_create_task_inference_window": {
+        const capturedAt = JSON.stringify(parameters.p_captured_at);
+        return (await database`
+          select app.create_task_inference_window(
+            ${parameters.p_window_id as string},
+            ${parameters.p_task_run_id as string},
+            ${ownerId},
+            ${parameters.p_client_request_id as string},
+            ${parameters.p_sequence_number as number},
+            ${parameters.p_observed_state_version as number},
+            ${parameters.p_image_ids as string[]},
+            ${capturedAt}::jsonb
           ) as result
         `)[0].result as T;
       }
@@ -1155,8 +1173,56 @@ async function getTaskRun(taskRunId: string, ownerId: string): Promise<TaskRun> 
 }
 
 function validateStateVersion(value: unknown): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 9e15) {
     throw new ApiError(422, "expectedStateVersion must be a positive integer.");
+  }
+  return value;
+}
+
+interface InferenceFrame {
+  imageId: string;
+  capturedAt: string;
+}
+
+function validateInferenceFrames(value: unknown): InferenceFrame[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 3) {
+    throw new ApiError(422, "frames must contain one to three images.");
+  }
+  const now = Date.now();
+  const frames = value.map((rawFrame, index) => {
+    if (typeof rawFrame !== "object" || rawFrame === null || Array.isArray(rawFrame)) {
+      throw new ApiError(422, `frames[${index}] must be an object.`);
+    }
+    const frame = rawFrame as Record<string, unknown>;
+    const imageId = validateUuid(frame.imageId, `frames[${index}].imageId`);
+    if (typeof frame.capturedAt !== "string") {
+      throw new ApiError(422, `frames[${index}].capturedAt must be an ISO timestamp.`);
+    }
+    const capturedAt = new Date(frame.capturedAt);
+    if (
+      Number.isNaN(capturedAt.getTime()) || capturedAt.toISOString() !== frame.capturedAt ||
+      capturedAt.getTime() < now - 30_000 || capturedAt.getTime() > now + 5_000
+    ) {
+      throw new ApiError(422, `frames[${index}].capturedAt is outside the allowed window.`);
+    }
+    return { imageId, capturedAt: frame.capturedAt };
+  });
+  if (new Set(frames.map((frame) => frame.imageId)).size !== frames.length) {
+    throw new ApiError(422, "frames must not repeat an image.");
+  }
+  if (
+    frames.some(
+      (frame, index) => index > 0 && frame.capturedAt <= frames[index - 1].capturedAt,
+    )
+  ) {
+    throw new ApiError(422, "frames must be ordered by capturedAt.");
+  }
+  return frames;
+}
+
+function validateSequenceNumber(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 9e15) {
+    throw new ApiError(422, "sequenceNumber must be a positive integer.");
   }
   return value;
 }
@@ -1351,6 +1417,55 @@ async function handleTaskRunCommand(
   return jsonResponse(result);
 }
 
+async function handleInferenceWindow(request: Request, taskRunId: string): Promise<Response> {
+  const user = await authenticate(request);
+  const payload = await requestJson(request);
+  const frames = validateInferenceFrames(payload.frames);
+  const result = await rpc<TaskRun>("edge_api_create_task_inference_window", {
+    p_window_id: crypto.randomUUID(),
+    p_task_run_id: taskRunId,
+    p_owner_id: user.id,
+    p_client_request_id: validateUuid(payload.clientRequestId, "clientRequestId"),
+    p_sequence_number: validateSequenceNumber(payload.sequenceNumber),
+    p_observed_state_version: validateStateVersion(payload.expectedStateVersion),
+    p_image_ids: frames.map((frame) => frame.imageId),
+    p_captured_at: frames.map((frame) => frame.capturedAt),
+  });
+  if (result.outcome === "not_found") {
+    throw new ApiError(404, "Task run not found.", false, "task_run_not_found");
+  }
+  if (result.outcome === "stale") {
+    throw new ApiError(409, "Task run state changed. Refresh and retry.", false, "task_run_stale", {
+      state_version: typeof result.stateVersion === "number" ? result.stateVersion : 0,
+    });
+  }
+  if (result.outcome === "out_of_order") {
+    throw new ApiError(
+      409,
+      "Inference window sequence is out of order.",
+      false,
+      "window_out_of_order",
+    );
+  }
+  if (result.outcome === "invalid_media") {
+    throw new ApiError(
+      422,
+      "Frames must belong to this active pairing.",
+      false,
+      "window_media_invalid",
+    );
+  }
+  if (result.outcome !== "accepted") {
+    throw new ApiError(
+      409,
+      "Task run is not accepting inference windows.",
+      false,
+      "task_run_not_active",
+    );
+  }
+  return jsonResponse(result, 202);
+}
+
 function routePath(pathname: string): string {
   const functionPrefix = "/functions/v1/api";
   if (pathname.startsWith(functionPrefix)) {
@@ -1397,6 +1512,7 @@ Deno.serve(async (request: Request) => {
       const taskPlanAction = path.match(/^\/v1\/task-plans\/([^/]+)\/(approve|validate)$/);
       const taskRun = path.match(/^\/v1\/task-runs\/([^/]+)$/);
       const taskRunAction = path.match(/^\/v1\/task-runs\/([^/]+)\/(commands|stop)$/);
+      const inferenceWindow = path.match(/^\/v1\/task-runs\/([^/]+)\/inference-windows$/);
       if (request.method === "DELETE" && imageDelete) {
         response = await handleImageDelete(request, url, imageDelete[1]);
       } else if (request.method === "GET" && taskPlan) {
@@ -1429,6 +1545,11 @@ Deno.serve(async (request: Request) => {
           request,
           validateUuid(taskRunAction[1], "taskRunId"),
           "stop",
+        );
+      } else if (request.method === "POST" && inferenceWindow) {
+        response = await handleInferenceWindow(
+          request,
+          validateUuid(inferenceWindow[1], "taskRunId"),
         );
       } else {
         throw new ApiError(404, "Not found.");

@@ -164,7 +164,7 @@ POST /v1/task-plans/{taskPlanId}/approve    implemented
 POST /v1/task-runs                          implemented
 GET  /v1/task-runs/{taskRunId}               implemented
 POST /v1/task-runs/{taskRunId}/commands      implemented
-POST /v1/task-runs/{taskRunId}/inference-windows
+POST /v1/task-runs/{taskRunId}/inference-windows implemented for 1-3 existing frames
 POST /v1/task-runs/{taskRunId}/stop          implemented
 ```
 
@@ -192,6 +192,11 @@ start camera capture until that response has been received.
 `POST /v1/task-runs` requires an approved plan version and an active pairing. The current slice
 returns a task-run ID, initial state version, and initial lens instruction. A later media-ingestion
 slice adds upload constraints and short-lived scoped media-upload authorization.
+
+For the early frame pilot, the client uploads JPEG or PNG images through the existing
+`POST /v1/images` route, then submits up to three ordered image IDs to the inference-window route.
+The API binds the images to the active run only when their pairing, owner, sequence number, and
+captured state version all match. Native video upload remains the ambiguity-escalation path.
 
 `POST /v1/task-runs/{taskRunId}/commands` accepts only this allowlist:
 
