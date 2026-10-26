@@ -197,6 +197,10 @@ For the early frame pilot, the client uploads JPEG or PNG images through the exi
 `POST /v1/images` route, then submits up to three ordered image IDs to the inference-window route.
 The API binds the images to the active run only when their pairing, owner, sequence number, and
 captured state version all match. Native video upload remains the ambiguity-escalation path.
+In AWS, the API process claims one queued window every two seconds, calls the fixed Nova Lite
+profile, and stores a bounded observation. A proposed completion publishes only the code-generated
+prompt to confirm, while a blocked result asks for a camera correction. The observation cannot
+advance, skip, confirm, or stop a task. Those transitions remain code-controlled and user-confirmed.
 
 `POST /v1/task-runs/{taskRunId}/commands` accepts only this allowlist:
 

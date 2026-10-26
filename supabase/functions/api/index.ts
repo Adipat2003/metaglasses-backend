@@ -19,6 +19,7 @@ import {
   generateExternalResponse,
   parseExternalProvider,
   ProviderConfigurationError,
+  signedBedrockRequest,
 } from "./providers.ts";
 import {
   TaskPlanValidationError,
@@ -34,6 +35,7 @@ const defaultNvidiaBaseUrl = "https://integrate.api.nvidia.com/v1";
 const defaultNvidiaModel = "meta/llama-3.2-90b-vision-instruct";
 const defaultNvidiaFallbackModel = "meta/llama-3.2-11b-vision-instruct";
 const finalNvidiaFallbackModel = "moonshotai/kimi-k3";
+const taskObservationModelId = "us.amazon.nova-lite-v1:0";
 const nvidiaRequestTimeoutMilliseconds = Deno.env.get("APP_ENV") === "aws" ? 20_000 : 5 * 60_000;
 
 const corsHeaders: Record<string, string> = {
@@ -453,6 +455,26 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
           ) as result
         `)[0].result as T;
       }
+      case "edge_api_claim_task_inference_window":
+        return await database`select * from app.claim_task_inference_window()` as T;
+      case "edge_api_complete_task_inference_window": {
+        const observation = JSON.stringify(parameters.p_observation);
+        return (await database`
+          select app.complete_task_inference_window(
+            ${parameters.p_observation_id as string},
+            ${parameters.p_inference_window_id as string},
+            ${ownerId},
+            ${parameters.p_model_id as string},
+            ${observation}::jsonb
+          ) as result
+        `)[0].result as T;
+      }
+      case "edge_api_reject_task_inference_window":
+        return (await database`
+          select app.reject_task_inference_window(${parameters.p_inference_window_id as string}, ${
+          ownerId
+        }) as result
+        `)[0].result as T;
       default:
         throw new Error(`Unsupported database operation: ${name}`);
     }
@@ -1184,6 +1206,189 @@ interface InferenceFrame {
   capturedAt: string;
 }
 
+interface TaskInferenceClaim {
+  inference_window_id: string;
+  task_run_id: string;
+  owner_id: string;
+  token_hash: string;
+  image_ids: string[];
+  observed_state_version: number;
+  current_step_ordinal: number;
+  source_steps: Array<{ instruction?: unknown }>;
+  validation_result: Record<string, unknown> | null;
+}
+
+interface TaskObservation {
+  summary: string;
+  proposedTransition: "remain_in_progress" | "candidate_complete" | "blocked";
+  confidence: number;
+  evidenceFrameIndexes: number[];
+}
+
+let inferenceWorkerRunning = false;
+
+function base64Encode(bytes: Uint8Array): string {
+  let value = "";
+  for (let index = 0; index < bytes.length; index += 32_768) {
+    value += String.fromCharCode(...bytes.subarray(index, index + 32_768));
+  }
+  return btoa(value);
+}
+
+function taskObservationText(payload: unknown): string {
+  const text = (payload as {
+    output?: { message?: { content?: Array<{ text?: unknown }> } };
+  }).output?.message?.content?.find((content) => typeof content.text === "string")?.text;
+  if (typeof text !== "string" || !text.trim()) throw new Error("Nova returned no observation.");
+  return text.trim();
+}
+
+function validateTaskObservation(value: unknown, frameCount: number): TaskObservation {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Nova returned an invalid observation.");
+  }
+  const candidate = value as Record<string, unknown>;
+  const summary = typeof candidate.summary === "string"
+    ? candidate.summary.normalize("NFKC").trim().replace(/\s+/g, " ")
+    : "";
+  const proposedTransition = candidate.proposedTransition;
+  const confidence = candidate.confidence;
+  const evidenceFrameIndexes = candidate.evidenceFrameIndexes;
+  if (
+    !summary || summary.length > 300 ||
+    (proposedTransition !== "remain_in_progress" && proposedTransition !== "candidate_complete" &&
+      proposedTransition !== "blocked") ||
+    typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1 ||
+    !Array.isArray(evidenceFrameIndexes) || evidenceFrameIndexes.length === 0 ||
+    evidenceFrameIndexes.length > frameCount ||
+    evidenceFrameIndexes.some((index) => !Number.isInteger(index) || index < 0 || index >= frameCount) ||
+    new Set(evidenceFrameIndexes).size !== evidenceFrameIndexes.length
+  ) {
+    throw new Error("Nova returned an invalid observation.");
+  }
+  return { summary, proposedTransition, confidence, evidenceFrameIndexes };
+}
+
+async function observeTaskInferenceWindow(claim: TaskInferenceClaim): Promise<TaskObservation> {
+  const images = await rpc<StoredImage[]>("edge_api_get_images", {
+    p_token_hash: claim.token_hash,
+    p_owner_id: claim.owner_id,
+    p_image_ids: claim.image_ids,
+  });
+  if (images.length !== claim.image_ids.length) throw new Error("Inference images are unavailable.");
+  const imagesById = new Map(images.map((image) => [image.image_id, image]));
+  const orderedImages = claim.image_ids.map((imageId) => imagesById.get(imageId));
+  if (orderedImages.some((image) => !image)) throw new Error("Inference images are unavailable.");
+  const bytes = await Promise.all(
+    orderedImages.map(async (image) => {
+      const response = await fetch(await signedImageUrl(image as StoredImage));
+      if (!response.ok) throw new Error("Inference image read failed.");
+      return new Uint8Array(await response.arrayBuffer());
+    }),
+  );
+  const sourceStep = claim.source_steps[claim.current_step_ordinal - 1];
+  const instruction = typeof sourceStep?.instruction === "string" ? sourceStep.instruction : null;
+  if (!instruction) throw new Error("Task run step is invalid.");
+  const criteria = Array.isArray(claim.validation_result?.steps)
+    ? (claim.validation_result.steps[claim.current_step_ordinal - 1] as Record<string, unknown> | undefined)
+      ?.visualAcceptanceCriteria
+    : [];
+  const request = await signedBedrockRequest(
+    {
+      type: "aws-bedrock",
+      ...await bedrockCredentials(),
+      region: awsRegion(),
+      model: taskObservationModelId,
+    },
+    JSON.stringify({
+      system: [{
+        text:
+          "You observe frames for one existing task step. Return JSON only. Do not give instructions, add steps, or claim completion. proposedTransition must be remain_in_progress, candidate_complete, or blocked.",
+      }],
+      messages: [{
+        role: "user",
+        content: [
+          {
+            text: JSON.stringify({
+              instruction,
+              visualAcceptanceCriteria: criteria,
+              requiredResponse: {
+                summary: "string",
+                proposedTransition: "remain_in_progress | candidate_complete | blocked",
+                confidence: "number from 0 to 1",
+                evidenceFrameIndexes: ["zero-based frame index"],
+              },
+            }),
+          },
+          ...orderedImages.map((image, index) => ({
+            image: {
+              format: image?.content_type === "image/png" ? "png" : "jpeg",
+              source: { bytes: base64Encode(bytes[index]) },
+            },
+          })),
+        ],
+      }],
+      inferenceConfig: { maxTokens: 320, temperature: 0 },
+    }),
+  );
+  const response = await fetch(request.url, {
+    ...request.init,
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok) throw new Error(`Nova returned HTTP ${response.status}.`);
+  return validateTaskObservation(JSON.parse(taskObservationText(await response.json())), bytes.length);
+}
+
+async function processTaskInferenceWindow(): Promise<void> {
+  if (inferenceWorkerRunning) return;
+  inferenceWorkerRunning = true;
+  let claim: TaskInferenceClaim | undefined;
+  try {
+    const claims = await rpc<TaskInferenceClaim[]>("edge_api_claim_task_inference_window", {});
+    claim = claims[0];
+    if (!claim) return;
+    console.info(JSON.stringify({
+      event: "task_inference_started",
+      request_id: claim.inference_window_id,
+      task_run_id: claim.task_run_id,
+      inference_window_id: claim.inference_window_id,
+      model: taskObservationModelId,
+    }));
+    const observation = await observeTaskInferenceWindow(claim);
+    const outcome = await rpc<string>("edge_api_complete_task_inference_window", {
+      p_observation_id: crypto.randomUUID(),
+      p_inference_window_id: claim.inference_window_id,
+      p_owner_id: claim.owner_id,
+      p_model_id: taskObservationModelId,
+      p_observation: observation,
+    });
+    console.info(JSON.stringify({
+      event: "task_inference_completed",
+      request_id: claim.inference_window_id,
+      task_run_id: claim.task_run_id,
+      inference_window_id: claim.inference_window_id,
+      model: taskObservationModelId,
+      outcome,
+    }));
+  } catch (error) {
+    if (claim) {
+      await rpc<boolean>("edge_api_reject_task_inference_window", {
+        p_inference_window_id: claim.inference_window_id,
+        p_owner_id: claim.owner_id,
+      }).catch(() => undefined);
+    }
+    console.error(JSON.stringify({
+      event: "task_inference_failed",
+      request_id: claim?.inference_window_id,
+      inference_window_id: claim?.inference_window_id,
+      model: taskObservationModelId,
+      failure_type: error instanceof Error ? error.name : "UnknownError",
+    }));
+  } finally {
+    inferenceWorkerRunning = false;
+  }
+}
+
 function validateInferenceFrames(value: unknown): InferenceFrame[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > 3) {
     throw new ApiError(422, "frames must contain one to three images.");
@@ -1474,6 +1679,11 @@ function routePath(pathname: string): string {
   if (pathname === "/api") return "/";
   if (pathname.startsWith("/api/")) return pathname.slice(4);
   return pathname;
+}
+
+if (Deno.env.get("APP_ENV") === "aws") {
+  void processTaskInferenceWindow();
+  setInterval(() => void processTaskInferenceWindow(), 2_000);
 }
 
 Deno.serve(async (request: Request) => {

@@ -47,6 +47,7 @@ declare
     existing_window app.task_inference_windows%rowtype;
     run_record app.task_runs%rowtype;
     image_count integer;
+    largest_image_bytes bigint;
     latest_sequence bigint;
 begin
     perform pg_advisory_xact_lock(hashtextextended(p_task_run_id::text, 0));
@@ -85,14 +86,14 @@ begin
         return jsonb_build_object('outcome', 'stale', 'stateVersion', run_record.state_version);
     end if;
 
-    select count(*) into image_count
+    select count(*), max(image.byte_size) into image_count, largest_image_bytes
     from app.pairing_images as image
     where image.id = any(p_image_ids)
       and image.token_hash = run_record.token_hash
       and image.owner_id = p_owner_id
       and image.status = 'active'
       and image.expires_at > statement_timestamp();
-    if image_count <> cardinality(p_image_ids) then
+    if image_count <> cardinality(p_image_ids) or largest_image_bytes > 2 * 1024 * 1024 then
         return jsonb_build_object('outcome', 'invalid_media');
     end if;
 
