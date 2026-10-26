@@ -1,8 +1,8 @@
 alter table app.task_runs
-    drop constraint task_runs_status_check,
+    drop constraint task_runs_status,
     drop constraint task_runs_stopped_state,
     add column current_step_status text not null default 'in_progress',
-    add constraint task_runs_status_check check (status in ('active', 'paused', 'stopped', 'completed')),
+    add constraint task_runs_status check (status in ('active', 'paused', 'stopped', 'completed')),
     add constraint task_runs_current_step_status check (current_step_status in ('in_progress', 'confirmed', 'skipped')),
     add constraint task_runs_terminal_state check (
         (status in ('stopped', 'completed') and stopped_at is not null)
