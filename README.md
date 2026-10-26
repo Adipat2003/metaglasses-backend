@@ -222,4 +222,5 @@ docker run --rm --volume "$PWD:/work" --workdir /work \
 - [AWS deployment and operations](docs/aws-deployment.md)
 - [Supabase setup and security](docs/supabase.md)
 - [Local development and Docker](docs/local-development.md)
+- [Task-plan validation and live guidance design](docs/task-plan-validation.md)
 - [Repository contribution guidance](AGENTS.md)
