@@ -246,6 +246,9 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     migration = (ROOT / "database" / "migrations" / "0002_task_plans.sql").read_text(
         encoding="utf-8"
     )
+    command_migration = (
+        ROOT / "database" / "migrations" / "0003_task_run_commands.sql"
+    ).read_text(encoding="utf-8")
     template = (ROOT / "infrastructure" / "aws" / "compute-foundation.yaml").read_text(
         encoding="utf-8"
     )
@@ -257,6 +260,8 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     assert "POST\" && path === \"/v1/task-runs\"" in api_source
     assert "create table app.task_plans" in migration
     assert "grant execute on function app.start_task_run" in migration
+    assert "create table app.task_run_commands" in command_migration
+    assert "create or replace function app.apply_task_run_command" in command_migration
     assert "bedrock:InvokeModel" in template
     assert "DATABASE_MIGRATOR_USER=metaglasses_migrator" in template
     assert "supabase/functions/migrate.ts" in workflow

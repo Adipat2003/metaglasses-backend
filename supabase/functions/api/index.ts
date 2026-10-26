@@ -129,6 +129,10 @@ function normalizedRoute(path: string): string {
   if (/^\/v1\/task-plans\/[^/]+\/(approve|validate)$/.test(path)) {
     return "/v1/task-plans/:taskPlanId/:action";
   }
+  if (/^\/v1\/task-runs\/[^/]+$/.test(path)) return "/v1/task-runs/:taskRunId";
+  if (/^\/v1\/task-runs\/[^/]+\/(commands|stop)$/.test(path)) {
+    return "/v1/task-runs/:taskRunId/:action";
+  }
   return path;
 }
 
@@ -265,6 +269,7 @@ function clientErrorContext(
     "suggested_action",
     "maximum_inline_image_bytes",
     "prior_upstream_statuses",
+    "state_version",
   ]);
   return Object.fromEntries(
     Object.entries(context).filter(([key]) => allowedKeys.has(key)),
@@ -410,6 +415,23 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
             ${parameters.p_task_plan_id as string},
             ${ownerId},
             ${parameters.p_client_request_id as string}
+          ) as result
+        `)[0].result as T;
+      }
+      case "edge_api_get_task_run": {
+        return (await database`
+          select app.task_run_view(${parameters.p_task_run_id as string}, ${ownerId}) as result
+        `)[0].result as T;
+      }
+      case "edge_api_apply_task_run_command": {
+        return (await database`
+          select app.apply_task_run_command(
+            ${parameters.p_command_id as string},
+            ${parameters.p_task_run_id as string},
+            ${ownerId},
+            ${parameters.p_client_request_id as string},
+            ${parameters.p_command as string},
+            ${parameters.p_expected_state_version as number}
           ) as result
         `)[0].result as T;
       }
@@ -1075,6 +1097,27 @@ async function handleImageDelete(
 }
 
 type TaskPlan = Record<string, unknown>;
+type TaskRun = Record<string, unknown>;
+type TaskRunCommand =
+  | "pause"
+  | "resume"
+  | "repeat"
+  | "confirm"
+  | "skip"
+  | "back"
+  | "correct"
+  | "stop";
+
+const taskRunCommands = new Set<TaskRunCommand>([
+  "pause",
+  "resume",
+  "repeat",
+  "confirm",
+  "skip",
+  "back",
+  "correct",
+  "stop",
+]);
 
 async function bedrockCredentials(): Promise<{
   accessKeyId: string;
@@ -1100,6 +1143,29 @@ async function getTaskPlan(taskPlanId: string, ownerId: string): Promise<TaskPla
   });
   if (!plan) throw new ApiError(404, "Task plan not found.", false, "task_plan_not_found");
   return plan;
+}
+
+async function getTaskRun(taskRunId: string, ownerId: string): Promise<TaskRun> {
+  const taskRun = await rpc<TaskRun | null>("edge_api_get_task_run", {
+    p_task_run_id: taskRunId,
+    p_owner_id: ownerId,
+  });
+  if (!taskRun) throw new ApiError(404, "Task run not found.", false, "task_run_not_found");
+  return taskRun;
+}
+
+function validateStateVersion(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new ApiError(422, "expectedStateVersion must be a positive integer.");
+  }
+  return value;
+}
+
+function validateTaskRunCommand(value: unknown): TaskRunCommand {
+  if (typeof value !== "string" || !taskRunCommands.has(value as TaskRunCommand)) {
+    throw new ApiError(422, "command is not supported.");
+  }
+  return value as TaskRunCommand;
 }
 
 function taskPlanInputError(error: unknown): never {
@@ -1246,6 +1312,45 @@ async function handleTaskRunStart(request: Request): Promise<Response> {
   return jsonResponse(taskRun, 201);
 }
 
+async function handleTaskRunCommand(
+  request: Request,
+  taskRunId: string,
+  forcedCommand?: TaskRunCommand,
+): Promise<Response> {
+  const user = await authenticate(request);
+  const payload = await requestJson(request);
+  const command = forcedCommand ?? validateTaskRunCommand(payload.command);
+  const result = await rpc<TaskRun>("edge_api_apply_task_run_command", {
+    p_command_id: crypto.randomUUID(),
+    p_task_run_id: taskRunId,
+    p_owner_id: user.id,
+    p_client_request_id: validateUuid(payload.clientRequestId, "clientRequestId"),
+    p_command: command,
+    p_expected_state_version: validateStateVersion(payload.expectedStateVersion),
+  });
+  const outcome = result.outcome;
+  if (outcome === "not_found") {
+    throw new ApiError(404, "Task run not found.", false, "task_run_not_found");
+  }
+  if (outcome === "stale") {
+    throw new ApiError(409, "Task run state changed. Refresh and retry.", false, "task_run_stale", {
+      state_version: typeof result.stateVersion === "number" ? result.stateVersion : 0,
+    });
+  }
+  if (outcome === "command_limit") {
+    throw new ApiError(429, "Task run command limit reached.", false, "task_run_command_limit");
+  }
+  if (outcome !== "applied") {
+    throw new ApiError(
+      409,
+      "Command is not valid for the current task run state.",
+      false,
+      "task_run_invalid_transition",
+    );
+  }
+  return jsonResponse(result);
+}
+
 function routePath(pathname: string): string {
   const functionPrefix = "/functions/v1/api";
   if (pathname.startsWith(functionPrefix)) {
@@ -1290,6 +1395,8 @@ Deno.serve(async (request: Request) => {
       const imageDelete = path.match(/^\/v1\/images\/([^/]+)$/);
       const taskPlan = path.match(/^\/v1\/task-plans\/([^/]+)$/);
       const taskPlanAction = path.match(/^\/v1\/task-plans\/([^/]+)\/(approve|validate)$/);
+      const taskRun = path.match(/^\/v1\/task-runs\/([^/]+)$/);
+      const taskRunAction = path.match(/^\/v1\/task-runs\/([^/]+)\/(commands|stop)$/);
       if (request.method === "DELETE" && imageDelete) {
         response = await handleImageDelete(request, url, imageDelete[1]);
       } else if (request.method === "GET" && taskPlan) {
@@ -1306,6 +1413,22 @@ Deno.serve(async (request: Request) => {
         response = await handleTaskPlanApprove(
           request,
           validateUuid(taskPlanAction[1], "taskPlanId"),
+        );
+      } else if (request.method === "GET" && taskRun) {
+        const user = await authenticate(request);
+        response = jsonResponse(
+          await getTaskRun(validateUuid(taskRun[1], "taskRunId"), user.id),
+        );
+      } else if (request.method === "POST" && taskRunAction?.[2] === "commands") {
+        response = await handleTaskRunCommand(
+          request,
+          validateUuid(taskRunAction[1], "taskRunId"),
+        );
+      } else if (request.method === "POST" && taskRunAction?.[2] === "stop") {
+        response = await handleTaskRunCommand(
+          request,
+          validateUuid(taskRunAction[1], "taskRunId"),
+          "stop",
         );
       } else {
         throw new ApiError(404, "Not found.");

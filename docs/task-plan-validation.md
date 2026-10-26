@@ -162,10 +162,10 @@ PATCH /v1/task-plans/{taskPlanId}/draft     planned
 POST /v1/task-plans/{taskPlanId}/validate   implemented
 POST /v1/task-plans/{taskPlanId}/approve    implemented
 POST /v1/task-runs                          implemented
-GET  /v1/task-runs/{taskRunId}
-POST /v1/task-runs/{taskRunId}/commands
+GET  /v1/task-runs/{taskRunId}               implemented
+POST /v1/task-runs/{taskRunId}/commands      implemented
 POST /v1/task-runs/{taskRunId}/inference-windows
-POST /v1/task-runs/{taskRunId}/stop
+POST /v1/task-runs/{taskRunId}/stop          implemented
 ```
 
 The implemented structured-list request is deliberately small and idempotent for an authenticated
@@ -224,7 +224,8 @@ paused -> cancelled | failed | expired
 ```
 
 Only the authenticated user or explicit backend lifecycle rules can start, pause, resume, cancel,
-or complete a run. A task run can be created only from an approved plan version.
+or complete a run. A task run can be created only from an approved plan version. The current API
+creates an active run directly because start itself is an explicit authenticated action.
 
 ### Per-step lifecycle
 
