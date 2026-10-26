@@ -471,13 +471,13 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
       }
       case "edge_api_reject_task_inference_window":
         return (await database`
-          select app.reject_task_inference_window(${parameters.p_inference_window_id as string}, ${
-          ownerId
-        }) as result
+          select app.reject_task_inference_window(${parameters
+          .p_inference_window_id as string}, ${ownerId}) as result
         `)[0].result as T;
       case "edge_api_publish_task_run_start":
         return (await database`
-          select app.publish_task_run_start(${parameters.p_task_run_id as string}, ${ownerId}) as result
+          select app.publish_task_run_start(${parameters
+          .p_task_run_id as string}, ${ownerId}) as result
         `)[0].result as T;
       default:
         throw new Error(`Unsupported database operation: ${name}`);
@@ -1262,10 +1262,13 @@ function validateTaskObservation(value: unknown, frameCount: number): TaskObserv
     !summary || summary.length > 300 ||
     (proposedTransition !== "remain_in_progress" && proposedTransition !== "candidate_complete" &&
       proposedTransition !== "blocked") ||
-    typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1 ||
+    typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 ||
+    confidence > 1 ||
     !Array.isArray(evidenceFrameIndexes) || evidenceFrameIndexes.length === 0 ||
     evidenceFrameIndexes.length > frameCount ||
-    evidenceFrameIndexes.some((index) => !Number.isInteger(index) || index < 0 || index >= frameCount) ||
+    evidenceFrameIndexes.some((index) =>
+      !Number.isInteger(index) || index < 0 || index >= frameCount
+    ) ||
     new Set(evidenceFrameIndexes).size !== evidenceFrameIndexes.length
   ) {
     throw new Error("Nova returned an invalid observation.");
@@ -1279,7 +1282,9 @@ async function observeTaskInferenceWindow(claim: TaskInferenceClaim): Promise<Ta
     p_owner_id: claim.owner_id,
     p_image_ids: claim.image_ids,
   });
-  if (images.length !== claim.image_ids.length) throw new Error("Inference images are unavailable.");
+  if (images.length !== claim.image_ids.length) {
+    throw new Error("Inference images are unavailable.");
+  }
   const imagesById = new Map(images.map((image) => [image.image_id, image]));
   const orderedImages = claim.image_ids.map((imageId) => imagesById.get(imageId));
   if (orderedImages.some((image) => !image)) throw new Error("Inference images are unavailable.");
@@ -1294,8 +1299,9 @@ async function observeTaskInferenceWindow(claim: TaskInferenceClaim): Promise<Ta
   const instruction = typeof sourceStep?.instruction === "string" ? sourceStep.instruction : null;
   if (!instruction) throw new Error("Task run step is invalid.");
   const criteria = Array.isArray(claim.validation_result?.steps)
-    ? (claim.validation_result.steps[claim.current_step_ordinal - 1] as Record<string, unknown> | undefined)
-      ?.visualAcceptanceCriteria
+    ? (claim.validation_result.steps[claim.current_step_ordinal - 1] as
+      | Record<string, unknown>
+      | undefined)?.visualAcceptanceCriteria
     : [];
   const request = await signedBedrockRequest(
     {
@@ -1340,7 +1346,10 @@ async function observeTaskInferenceWindow(claim: TaskInferenceClaim): Promise<Ta
     signal: AbortSignal.timeout(8_000),
   });
   if (!response.ok) throw new Error(`Nova returned HTTP ${response.status}.`);
-  return validateTaskObservation(JSON.parse(taskObservationText(await response.json())), bytes.length);
+  return validateTaskObservation(
+    JSON.parse(taskObservationText(await response.json())),
+    bytes.length,
+  );
 }
 
 async function processTaskInferenceWindow(): Promise<void> {
