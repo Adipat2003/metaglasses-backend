@@ -5,10 +5,10 @@ Metadata:
   AWSToolsMetrics:
     AWSAgentToolkit: aws-cloudformation@3
   com.aws.cloudformation.Context:
-    arch: one SSM-managed EC2 API instance pulls immutable images from ECR
+    arch: one SSM-managed EC2 API instance pulls immutable images from ECR and connects to private PostgreSQL through IAM authentication
     must:
       - No SSH or public API ingress is permitted before a TLS endpoint is approved.
-      - The API uses Cognito JWTs, Aurora IAM authentication, and private S3 objects.
+      - The API uses Cognito JWTs, PostgreSQL IAM authentication, and private S3 objects.
 
 Parameters:
   VpcId:
@@ -17,7 +17,7 @@ Parameters:
     Type: AWS::EC2::Subnet::Id
   DatabaseSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
-  DatabaseClusterResourceId:
+  DatabaseResourceId:
     Type: String
   PairingImagesBucketName:
     Type: String
@@ -111,8 +111,18 @@ Resources:
                 Action: secretsmanager:GetSecretValue
                 Resource: !Ref NvidiaSecretArn
               - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.anthropic.claude-haiku-5-5"
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-lite-v1:0"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/anthropic.claude-haiku-5-5"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/amazon.nova-lite-v1:0"
+              - Effect: Allow
                 Action: rds-db:connect
-                Resource: !Sub "arn:${AWS::Partition}:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${DatabaseClusterResourceId}/metaglasses_api"
+                Resource: !Sub "arn:${AWS::Partition}:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${DatabaseResourceId}/metaglasses_api"
+              - Effect: Allow
+                Action: rds-db:connect
+                Resource: !Sub "arn:${AWS::Partition}:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${DatabaseResourceId}/metaglasses_migrator"
 
   ApiInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -150,10 +160,10 @@ Resources:
               DATABASE_HOST=${DatabaseHost}
               DATABASE_PORT=5432
               DATABASE_NAME=metaglasses
+              DATABASE_MIGRATOR_USER=metaglasses_migrator
               PAIRING_IMAGE_BUCKET=${PairingImagesBucketName}
               NVIDIA_SECRET_ARN=${NvidiaSecretArn}
               NVIDIA_MODEL=meta/llama-3.2-90b-vision-instruct
-              NVIDIA_VIDEO_MODEL=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
               NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
               EOF
               chmod 600 /opt/metaglasses/runtime.env

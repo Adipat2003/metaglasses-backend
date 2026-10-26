@@ -1,11 +1,11 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "MetaGlasses database foundation: private Aurora PostgreSQL with no public ingress."
+Description: "MetaGlasses database foundation: private cost-optimized RDS PostgreSQL with no public ingress."
 
 Metadata:
   AWSToolsMetrics:
     AWSAgentToolkit: aws-cloudformation@3
   com.aws.cloudformation.Context:
-    arch: one VPC, two isolated DB subnets, one Aurora writer
+    arch: one VPC, two isolated DB subnets, and one cost-optimized RDS PostgreSQL instance
     must:
       - Database has no public network path.
       - AWS manages the master password in Secrets Manager.
@@ -40,7 +40,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Metadata:
       com.aws.cloudformation.Context:
-        why: First isolated subnet required by Aurora's multi-AZ subnet group.
+        why: First isolated subnet in the PostgreSQL database subnet group.
         must:
           - Must not assign public IPv4 addresses.
         mutable: review-required
@@ -59,7 +59,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Metadata:
       com.aws.cloudformation.Context:
-        why: Second isolated subnet required by Aurora's multi-AZ subnet group.
+        why: Second isolated subnet in the PostgreSQL database subnet group.
         must:
           - Must not assign public IPv4 addresses.
         mutable: review-required
@@ -159,7 +159,7 @@ Resources:
     Type: AWS::RDS::DBSubnetGroup
     Metadata:
       com.aws.cloudformation.Context:
-        why: Pins Aurora to isolated subnets in two availability zones.
+        why: Pins RDS PostgreSQL to isolated subnets in two availability zones.
         must:
           - Database subnets must never be changed to public subnets.
         mutable: review-required
@@ -193,81 +193,53 @@ Resources:
         - Key: Project
           Value: metaglasses
 
-  DatabaseCluster:
-    Type: AWS::RDS::DBCluster
+  CostOptimizedDatabase:
+    Type: AWS::RDS::DBInstance
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Metadata:
       com.aws.cloudformation.Context:
-        why: Managed PostgreSQL preserves the existing relational schema and stored procedures.
+        why: Provides the single-AZ, low-cost PostgreSQL database for the single shared environment.
         must:
-          - Must stay private, encrypted, and deletion-protected.
+          - Must remain private, encrypted, deletion-protected, and reachable only through DatabaseSecurityGroup.
           - Master password must remain RDS-managed and never enter source control.
         mutable: change-with-constraints
         mutability:
+          DBInstanceClass: review-required
           Engine: must-never-change
           EngineVersion: review-required
           MasterUsername: must-never-change
     Properties:
+      AllocatedStorage: 20
+      AutoMinorVersionUpgrade: true
       BackupRetentionPeriod: 7
       CopyTagsToSnapshot: true
-      DatabaseName: metaglasses
+      DBInstanceClass: db.t4g.micro
+      DBName: metaglasses
       DBSubnetGroupName: !Ref DatabaseSubnetGroup
       DeletionProtection: true
-      EnableHttpEndpoint: true
-      EnableIAMDatabaseAuthentication: true
       EnableCloudwatchLogsExports:
         - postgresql
-      Engine: aurora-postgresql
+      EnableIAMDatabaseAuthentication: true
+      Engine: postgres
       EngineVersion: "17.9"
       ManageMasterUserPassword: true
       MasterUsername: dbadmin
+      MultiAZ: false
+      PubliclyAccessible: false
       StorageEncrypted: true
-      ServerlessV2ScalingConfiguration:
-        MinCapacity: 0.5
-        MaxCapacity: 2
-      VpcSecurityGroupIds:
+      StorageType: gp3
+      VPCSecurityGroups:
         - !Ref DatabaseSecurityGroup
       Tags:
         - Key: Project
           Value: metaglasses
         - Key: Component
           Value: database
-
-  DatabaseWriter:
-    Type: AWS::RDS::DBInstance
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Metadata:
-      com.aws.cloudformation.Context:
-        why: One serverless writer is enough for the requested single environment.
-        must:
-          - Must remain non-public.
-        mutable: change-with-constraints
-        mutability:
-          DBInstanceClass: review-required
-    Properties:
-      AutoMinorVersionUpgrade: true
-      DBClusterIdentifier: !Ref DatabaseCluster
-      DBInstanceClass: db.serverless
-      Engine: aurora-postgresql
-      PubliclyAccessible: false
-      Tags:
-        - Key: Project
-          Value: metaglasses
-        - Key: Component
-          Value: database
+        - Key: CostProfile
+          Value: shared-development
 
 Outputs:
-  DatabaseClusterEndpoint:
-    Description: Private writer endpoint for the future API instance.
-    Value: !GetAtt DatabaseCluster.Endpoint.Address
-  DatabasePort:
-    Description: PostgreSQL port for the future API instance.
-    Value: !GetAtt DatabaseCluster.Endpoint.Port
-  DatabaseMasterSecretArn:
-    Description: RDS-managed Secrets Manager secret ARN. The secret value is not an output.
-    Value: !GetAtt DatabaseCluster.MasterUserSecret.SecretArn
   DatabaseSecurityGroupId:
     Description: Security group to reference from the future API instance security group.
     Value: !Ref DatabaseSecurityGroup
@@ -277,3 +249,15 @@ Outputs:
   ApiSubnetId:
     Description: Public-egress subnet reserved for the private-by-security-group API instance.
     Value: !Ref ApiSubnet
+  DatabaseHost:
+    Description: Private RDS PostgreSQL endpoint for the API runtime.
+    Value: !GetAtt CostOptimizedDatabase.Endpoint.Address
+  DatabasePort:
+    Description: PostgreSQL port for the RDS database.
+    Value: !GetAtt CostOptimizedDatabase.Endpoint.Port
+  DatabaseResourceId:
+    Description: RDS database resource ID for IAM database authentication policies.
+    Value: !GetAtt CostOptimizedDatabase.DbiResourceId
+  DatabaseMasterSecretArn:
+    Description: RDS-managed bootstrap secret ARN. The secret value is not an output.
+    Value: !GetAtt CostOptimizedDatabase.MasterUserSecret.SecretArn

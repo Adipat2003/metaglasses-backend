@@ -1,15 +1,13 @@
 # MetaGlasses backend
 
-The hosted MetaGlasses API runs as a routed Supabase Edge Function. Supabase also provides
-Postgres, Auth, private image Storage, and scheduled image cleanup. All hosted backend
-environments run on Supabase.
+The hosted MetaGlasses API runs as a single routed HTTP service on AWS. Its source remains under
+`supabase/functions/` while the migration is completed, but AWS EC2 is the deployed runtime.
 
 ## Hosted API
 
 | Environment | API base URL | Storage bucket |
 | --- | --- | --- |
-| Trial | `https://uitdzmwfqtsohgffhuom.supabase.co/functions/v1/api` | `Images` |
-| Production | `https://hxtdfghufjjmeltarffl.supabase.co/functions/v1/api` | `images` |
+| AWS single environment | `https://xay03orwv0.execute-api.us-east-1.amazonaws.com` | Private S3 bucket from `metaglasses-storage` |
 
 Append the existing route to the environment base URL:
 
@@ -19,9 +17,8 @@ Append the existing route to the environment base URL:
 - `POST /v1/chat`
 - `POST /v1/images`
 - `DELETE /v1/images/{image_id}`
-- `GET /v1/video-stream` (WebSocket upgrade)
 
-Phone routes require a Supabase user access token in `Authorization: Bearer <token>`. The
+Phone routes require a Cognito user access token in `Authorization: Bearer <token>`. The
 lens display route uses the random pairing token as its capability credential. The Edge API
 returns permissive CORS headers. CORS does not replace authentication or pairing ownership
 enforcement.
@@ -53,14 +50,16 @@ Attach the returned `imageId` to a user chat message:
 }
 ```
 
-The Edge Function creates a 10-minute signed Storage URL for the NVIDIA request. Images and
-metadata expire with their pairing and are deleted by the scheduled cleanup function. The hosted
+The API creates a 10-minute signed S3 URL for the NVIDIA request. Images and metadata expire with
+their pairing and are deleted by the scheduled cleanup worker. The hosted
 API does not impose a fixed number of images per pairing, although each image must still satisfy
 the file size and content-type validation.
 
 Chat inference uses Llama 3.2 90B Vision by default. If NVIDIA returns a model-not-found or
 provider-side 5xx error, the request is retried with Llama 3.2 11B Vision and then Kimi K3.
 Authentication, validation, and rate-limit responses are returned without a model fallback.
+AWS model requests have a 20-second deadline so API Gateway can return a safe application error
+before its 30-second integration limit.
 
 ### Use your own model provider
 
@@ -120,18 +119,6 @@ Common codes include `provider_configuration_invalid`, `provider_auth_rejected`,
 
 The API forwards only the user and assistant messages supplied in `messages`. It does not add a
 system prompt or inject server-side context.
-
-## Ephemeral video streaming
-
-After registering a pairing, connect to the video endpoint with `wss://`, the Supabase access
-token in the `Authorization` header, and the pairing token in the query string. Send a JSON
-`start` control message followed by binary encoded-video chunks. Transport mode acknowledges and
-discards each chunk. Opt-in `mode: "nvidia"` analyzes complete MP4 clips with Nemotron 3 Nano Omni
-and returns `analysis` messages on the socket. Neither mode records video.
-
-The endpoint requests a reconnect after two minutes so a stream does not depend on one Edge
-Function worker living indefinitely. See [the video stream protocol](docs/supabase.md#ephemeral-video-streams)
-for message formats, limits, and reconnect behavior.
 
 ## Postman
 
@@ -226,14 +213,14 @@ docker run --rm --volume "$PWD:/work" --workdir /work \
   supabase/functions/cleanup-pairing-images/index.ts
 docker run --rm --volume "$PWD:/work" --workdir /work \
   denoland/deno:2.5.2 deno test --config supabase/functions/deno.json \
-  supabase/functions/api/nvidia_test.ts \
-  supabase/functions/api/video_stream_test.ts \
-  supabase/functions/api/nvidia_video_test.ts
+  supabase/functions/api/nvidia_test.ts
 ```
 
 ## Documentation
 
 - [Deployment and operations](docs/deployment.md)
+- [AWS deployment and operations](docs/aws-deployment.md)
 - [Supabase setup and security](docs/supabase.md)
 - [Local development and Docker](docs/local-development.md)
+- [Task-plan validation and live guidance design](docs/task-plan-validation.md)
 - [Repository contribution guidance](AGENTS.md)

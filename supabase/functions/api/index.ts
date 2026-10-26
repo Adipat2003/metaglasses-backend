@@ -13,22 +13,19 @@ import {
 } from "npm:@aws-sdk/client-secrets-manager@3.1149.0";
 import { getSignedUrl } from "npm:@aws-sdk/s3-request-presigner@3.1149.0";
 import postgres from "npm:postgres@3.4.9";
-import { analyzeVideoClip, VideoModelError } from "./nvidia_video.ts";
 import {
   ExternalProviderConfig,
   ExternalProviderError,
   generateExternalResponse,
   parseExternalProvider,
   ProviderConfigurationError,
+  signedBedrockRequest,
 } from "./providers.ts";
 import {
-  maxPendingVideoMessages,
-  maxVideoChunkBytes,
-  maxVideoSessionMilliseconds,
-  parseVideoStreamControl,
-  videoChunkByteLength,
-  VideoStreamProtocolError,
-} from "./video_stream.ts";
+  TaskPlanValidationError,
+  validateTaskPlanInput,
+  validateTaskPlanWithClaude,
+} from "./task_plan.ts";
 
 const pairingTtlSeconds = 3600;
 const maxImageBytes = 8 * 1024 * 1024;
@@ -38,7 +35,8 @@ const defaultNvidiaBaseUrl = "https://integrate.api.nvidia.com/v1";
 const defaultNvidiaModel = "meta/llama-3.2-90b-vision-instruct";
 const defaultNvidiaFallbackModel = "meta/llama-3.2-11b-vision-instruct";
 const finalNvidiaFallbackModel = "moonshotai/kimi-k3";
-const nvidiaRequestTimeoutMilliseconds = 5 * 60_000;
+const taskObservationModelId = "us.amazon.nova-lite-v1:0";
+const nvidiaRequestTimeoutMilliseconds = Deno.env.get("APP_ENV") === "aws" ? 20_000 : 5 * 60_000;
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -129,19 +127,18 @@ function requestEnvironment(): "local" | "aws" | "unknown" {
 
 function normalizedRoute(path: string): string {
   if (/^\/v1\/images\/[^/]+$/.test(path)) return "/v1/images/:imageId";
+  if (/^\/v1\/task-plans\/[^/]+$/.test(path)) return "/v1/task-plans/:taskPlanId";
+  if (/^\/v1\/task-plans\/[^/]+\/(approve|validate)$/.test(path)) {
+    return "/v1/task-plans/:taskPlanId/:action";
+  }
+  if (/^\/v1\/task-runs\/[^/]+$/.test(path)) return "/v1/task-runs/:taskRunId";
+  if (/^\/v1\/task-runs\/[^/]+\/(commands|stop)$/.test(path)) {
+    return "/v1/task-runs/:taskRunId/:action";
+  }
+  if (/^\/v1\/task-runs\/[^/]+\/inference-windows$/.test(path)) {
+    return "/v1/task-runs/:taskRunId/inference-windows";
+  }
   return path;
-}
-
-interface VideoStreamLog {
-  event: "video_stream_closed";
-  service: "api";
-  environment: "local" | "aws" | "unknown";
-  request_id: string;
-  session_id: string;
-  duration_ms: number;
-  chunk_count: number;
-  byte_count: number;
-  close_code: number;
 }
 
 function redactedErrorText(value: string): string {
@@ -277,6 +274,7 @@ function clientErrorContext(
     "suggested_action",
     "maximum_inline_image_bytes",
     "prior_upstream_statuses",
+    "state_version",
   ]);
   return Object.fromEntries(
     Object.entries(context).filter(([key]) => allowedKeys.has(key)),
@@ -382,6 +380,105 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
       case "edge_api_remove_image":
         return await database`select * from app.remove_image(${tokenHash}, ${ownerId}, ${parameters
           .p_image_id as string})` as T;
+      case "edge_api_create_task_plan": {
+        const sourceSteps = JSON.stringify(parameters.p_source_steps);
+        return (await database`
+          select app.create_task_plan(
+            ${parameters.p_task_plan_id as string},
+            ${tokenHash},
+            ${ownerId},
+            ${parameters.p_client_request_id as string},
+            ${parameters.p_title as string},
+            ${sourceSteps}::jsonb
+          ) as result
+        `)[0].result as T;
+      }
+      case "edge_api_get_task_plan": {
+        return (await database`
+          select app.task_plan_view(${parameters.p_task_plan_id as string}, ${ownerId}) as result
+        `)[0].result as T;
+      }
+      case "edge_api_save_task_plan_validation": {
+        const validationResult = JSON.stringify(parameters.p_validation_result);
+        return (await database`
+          select app.save_task_plan_validation(
+            ${parameters.p_task_plan_id as string},
+            ${ownerId},
+            ${validationResult}::jsonb
+          ) as result
+        `)[0].result as T;
+      }
+      case "edge_api_approve_task_plan": {
+        return (await database`
+          select app.approve_task_plan(${parameters.p_task_plan_id as string}, ${ownerId}) as result
+        `)[0].result as T;
+      }
+      case "edge_api_start_task_run": {
+        return (await database`
+          select app.start_task_run(
+            ${parameters.p_task_run_id as string},
+            ${parameters.p_task_plan_id as string},
+            ${ownerId},
+            ${parameters.p_client_request_id as string}
+          ) as result
+        `)[0].result as T;
+      }
+      case "edge_api_get_task_run": {
+        return (await database`
+          select app.task_run_view(${parameters.p_task_run_id as string}, ${ownerId}) as result
+        `)[0].result as T;
+      }
+      case "edge_api_apply_task_run_command": {
+        return (await database`
+          select app.apply_task_run_command(
+            ${parameters.p_command_id as string},
+            ${parameters.p_task_run_id as string},
+            ${ownerId},
+            ${parameters.p_client_request_id as string},
+            ${parameters.p_command as string},
+            ${parameters.p_expected_state_version as number}
+          ) as result
+        `)[0].result as T;
+      }
+      case "edge_api_create_task_inference_window": {
+        const capturedAt = JSON.stringify(parameters.p_captured_at);
+        return (await database`
+          select app.create_task_inference_window(
+            ${parameters.p_window_id as string},
+            ${parameters.p_task_run_id as string},
+            ${ownerId},
+            ${parameters.p_client_request_id as string},
+            ${parameters.p_sequence_number as number},
+            ${parameters.p_observed_state_version as number},
+            ${parameters.p_image_ids as string[]},
+            ${capturedAt}::jsonb
+          ) as result
+        `)[0].result as T;
+      }
+      case "edge_api_claim_task_inference_window":
+        return await database`select * from app.claim_task_inference_window()` as T;
+      case "edge_api_complete_task_inference_window": {
+        const observation = JSON.stringify(parameters.p_observation);
+        return (await database`
+          select app.complete_task_inference_window(
+            ${parameters.p_observation_id as string},
+            ${parameters.p_inference_window_id as string},
+            ${ownerId},
+            ${parameters.p_model_id as string},
+            ${observation}::jsonb
+          ) as result
+        `)[0].result as T;
+      }
+      case "edge_api_reject_task_inference_window":
+        return (await database`
+          select app.reject_task_inference_window(${parameters
+          .p_inference_window_id as string}, ${ownerId}) as result
+        `)[0].result as T;
+      case "edge_api_publish_task_run_start":
+        return (await database`
+          select app.publish_task_run_start(${parameters
+          .p_task_run_id as string}, ${ownerId}) as result
+        `)[0].result as T;
       default:
         throw new Error(`Unsupported database operation: ${name}`);
     }
@@ -1043,211 +1140,555 @@ async function handleImageDelete(
   return emptyResponse(204);
 }
 
-async function handleVideoStream(
-  request: Request,
-  url: URL,
-  requestId: string,
-): Promise<Response> {
-  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+type TaskPlan = Record<string, unknown>;
+type TaskRun = Record<string, unknown>;
+type TaskRunCommand =
+  | "pause"
+  | "resume"
+  | "repeat"
+  | "confirm"
+  | "skip"
+  | "back"
+  | "correct"
+  | "stop";
+
+const taskRunCommands = new Set<TaskRunCommand>([
+  "pause",
+  "resume",
+  "repeat",
+  "confirm",
+  "skip",
+  "back",
+  "correct",
+  "stop",
+]);
+
+async function bedrockCredentials(): Promise<{
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+}> {
+  const credentials = await s3.config.credentials();
+  if (!credentials || !credentials.accessKeyId || !credentials.secretAccessKey) {
     throw new ApiError(
-      426,
-      "This endpoint requires a WebSocket upgrade.",
+      503,
+      "AWS model credentials are unavailable.",
       false,
-      "websocket_upgrade_required",
+      "model_credentials_unavailable",
     );
   }
-  const user = await authenticate(request);
-  const token = validateToken(url.searchParams.get("pairingToken"));
-  await pairingAccess(token, user.id);
+  return credentials;
+}
 
-  const { socket, response } = Deno.upgradeWebSocket(request);
-  const sessionId = crypto.randomUUID();
-  const startedAt = performance.now();
-  let started = false;
-  let inferencePrompt: string | undefined;
-  let inference: AbortController | undefined;
-  let stopping = false;
-  let chunkCount = 0;
-  let byteCount = 0;
-  let pendingMessageCount = 0;
-  let closeCode = 1006;
-  let messageQueue = Promise.resolve();
-  let noticeTimer: number | undefined;
-  let closeTimer: number | undefined;
-  let resolveClosed: () => void = () => undefined;
-  const closed = new Promise<void>((resolve) => {
-    resolveClosed = resolve;
+async function getTaskPlan(taskPlanId: string, ownerId: string): Promise<TaskPlan> {
+  const plan = await rpc<TaskPlan | null>("edge_api_get_task_plan", {
+    p_task_plan_id: taskPlanId,
+    p_owner_id: ownerId,
   });
+  if (!plan) throw new ApiError(404, "Task plan not found.", false, "task_plan_not_found");
+  return plan;
+}
 
-  const send = (payload: Record<string, unknown>): void => {
-    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
-  };
-  const protocolFailure = (message: string, code = 1002): void => {
-    stopping = true;
-    inference?.abort();
-    send({ type: "error", code: "video_stream_protocol_error", message });
-    socket.close(code, message.slice(0, 120));
-  };
+async function getTaskRun(taskRunId: string, ownerId: string): Promise<TaskRun> {
+  const taskRun = await rpc<TaskRun | null>("edge_api_get_task_run", {
+    p_task_run_id: taskRunId,
+    p_owner_id: ownerId,
+  });
+  if (!taskRun) throw new ApiError(404, "Task run not found.", false, "task_run_not_found");
+  return taskRun;
+}
 
-  socket.onopen = () => {
-    send({
-      type: "ready",
-      sessionId,
-      maxChunkBytes: maxVideoChunkBytes,
-      maxUnacknowledgedMessages: maxPendingVideoMessages,
-      maxSessionMilliseconds: maxVideoSessionMilliseconds,
+function validateStateVersion(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 9e15) {
+    throw new ApiError(422, "expectedStateVersion must be a positive integer.");
+  }
+  return value;
+}
+
+interface InferenceFrame {
+  imageId: string;
+  capturedAt: string;
+}
+
+interface TaskInferenceClaim {
+  inference_window_id: string;
+  task_run_id: string;
+  owner_id: string;
+  token_hash: string;
+  image_ids: string[];
+  observed_state_version: number;
+  current_step_ordinal: number;
+  source_steps: Array<{ instruction?: unknown }>;
+  validation_result: Record<string, unknown> | null;
+}
+
+interface TaskObservation {
+  summary: string;
+  proposedTransition: "remain_in_progress" | "candidate_complete" | "blocked";
+  confidence: number;
+  evidenceFrameIndexes: number[];
+}
+
+let inferenceWorkerRunning = false;
+
+function base64Encode(bytes: Uint8Array): string {
+  let value = "";
+  for (let index = 0; index < bytes.length; index += 32_768) {
+    value += String.fromCharCode(...bytes.subarray(index, index + 32_768));
+  }
+  return btoa(value);
+}
+
+function taskObservationText(payload: unknown): string {
+  const text = (payload as {
+    output?: { message?: { content?: Array<{ text?: unknown }> } };
+  }).output?.message?.content?.find((content) => typeof content.text === "string")?.text;
+  if (typeof text !== "string" || !text.trim()) throw new Error("Nova returned no observation.");
+  return text.trim();
+}
+
+function validateTaskObservation(value: unknown, frameCount: number): TaskObservation {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Nova returned an invalid observation.");
+  }
+  const candidate = value as Record<string, unknown>;
+  const summary = typeof candidate.summary === "string"
+    ? candidate.summary.normalize("NFKC").trim().replace(/\s+/g, " ")
+    : "";
+  const proposedTransition = candidate.proposedTransition;
+  const confidence = candidate.confidence;
+  const evidenceFrameIndexes = candidate.evidenceFrameIndexes;
+  if (
+    !summary || summary.length > 300 ||
+    (proposedTransition !== "remain_in_progress" && proposedTransition !== "candidate_complete" &&
+      proposedTransition !== "blocked") ||
+    typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 ||
+    confidence > 1 ||
+    !Array.isArray(evidenceFrameIndexes) || evidenceFrameIndexes.length === 0 ||
+    evidenceFrameIndexes.length > frameCount ||
+    evidenceFrameIndexes.some((index) =>
+      !Number.isInteger(index) || index < 0 || index >= frameCount
+    ) ||
+    new Set(evidenceFrameIndexes).size !== evidenceFrameIndexes.length
+  ) {
+    throw new Error("Nova returned an invalid observation.");
+  }
+  return { summary, proposedTransition, confidence, evidenceFrameIndexes };
+}
+
+async function observeTaskInferenceWindow(claim: TaskInferenceClaim): Promise<TaskObservation> {
+  const images = await rpc<StoredImage[]>("edge_api_get_images", {
+    p_token_hash: claim.token_hash,
+    p_owner_id: claim.owner_id,
+    p_image_ids: claim.image_ids,
+  });
+  if (images.length !== claim.image_ids.length) {
+    throw new Error("Inference images are unavailable.");
+  }
+  const imagesById = new Map(images.map((image) => [image.image_id, image]));
+  const orderedImages = claim.image_ids.map((imageId) => imagesById.get(imageId));
+  if (orderedImages.some((image) => !image)) throw new Error("Inference images are unavailable.");
+  const bytes = await Promise.all(
+    orderedImages.map(async (image) => {
+      const response = await fetch(await signedImageUrl(image as StoredImage));
+      if (!response.ok) throw new Error("Inference image read failed.");
+      return new Uint8Array(await response.arrayBuffer());
+    }),
+  );
+  const sourceStep = claim.source_steps[claim.current_step_ordinal - 1];
+  const instruction = typeof sourceStep?.instruction === "string" ? sourceStep.instruction : null;
+  if (!instruction) throw new Error("Task run step is invalid.");
+  const criteria = Array.isArray(claim.validation_result?.steps)
+    ? (claim.validation_result.steps[claim.current_step_ordinal - 1] as
+      | Record<string, unknown>
+      | undefined)?.visualAcceptanceCriteria
+    : [];
+  const request = await signedBedrockRequest(
+    {
+      type: "aws-bedrock",
+      ...await bedrockCredentials(),
+      region: awsRegion(),
+      model: taskObservationModelId,
+    },
+    JSON.stringify({
+      system: [{
+        text:
+          "You observe frames for one existing task step. Return JSON only. Do not give instructions, add steps, or claim completion. proposedTransition must be remain_in_progress, candidate_complete, or blocked.",
+      }],
+      messages: [{
+        role: "user",
+        content: [
+          {
+            text: JSON.stringify({
+              instruction,
+              visualAcceptanceCriteria: criteria,
+              requiredResponse: {
+                summary: "string",
+                proposedTransition: "remain_in_progress | candidate_complete | blocked",
+                confidence: "number from 0 to 1",
+                evidenceFrameIndexes: ["zero-based frame index"],
+              },
+            }),
+          },
+          ...orderedImages.map((image, index) => ({
+            image: {
+              format: image?.content_type === "image/png" ? "png" : "jpeg",
+              source: { bytes: base64Encode(bytes[index]) },
+            },
+          })),
+        ],
+      }],
+      inferenceConfig: { maxTokens: 320, temperature: 0 },
+    }),
+  );
+  const response = await fetch(request.url, {
+    ...request.init,
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok) throw new Error(`Nova returned HTTP ${response.status}.`);
+  return validateTaskObservation(
+    JSON.parse(taskObservationText(await response.json())),
+    bytes.length,
+  );
+}
+
+async function processTaskInferenceWindow(): Promise<void> {
+  if (inferenceWorkerRunning) return;
+  inferenceWorkerRunning = true;
+  let claim: TaskInferenceClaim | undefined;
+  try {
+    const claims = await rpc<TaskInferenceClaim[]>("edge_api_claim_task_inference_window", {});
+    claim = claims[0];
+    if (!claim) return;
+    console.info(JSON.stringify({
+      event: "task_inference_started",
+      request_id: claim.inference_window_id,
+      task_run_id: claim.task_run_id,
+      inference_window_id: claim.inference_window_id,
+      model: taskObservationModelId,
+    }));
+    const observation = await observeTaskInferenceWindow(claim);
+    const outcome = await rpc<string>("edge_api_complete_task_inference_window", {
+      p_observation_id: crypto.randomUUID(),
+      p_inference_window_id: claim.inference_window_id,
+      p_owner_id: claim.owner_id,
+      p_model_id: taskObservationModelId,
+      p_observation: observation,
     });
-    noticeTimer = setTimeout(() => {
-      send({ type: "reconnect_required", reason: "session_limit" });
-    }, maxVideoSessionMilliseconds - 5_000);
-    closeTimer = setTimeout(() => {
-      stopping = true;
-      inference?.abort();
-      socket.close(1012, "Reconnect to continue streaming.");
-    }, maxVideoSessionMilliseconds);
-  };
+    console.info(JSON.stringify({
+      event: "task_inference_completed",
+      request_id: claim.inference_window_id,
+      task_run_id: claim.task_run_id,
+      inference_window_id: claim.inference_window_id,
+      model: taskObservationModelId,
+      outcome,
+    }));
+  } catch (error) {
+    if (claim) {
+      await rpc<boolean>("edge_api_reject_task_inference_window", {
+        p_inference_window_id: claim.inference_window_id,
+        p_owner_id: claim.owner_id,
+      }).catch(() => undefined);
+    }
+    console.error(JSON.stringify({
+      event: "task_inference_failed",
+      request_id: claim?.inference_window_id,
+      inference_window_id: claim?.inference_window_id,
+      model: taskObservationModelId,
+      failure_type: error instanceof Error ? error.name : "UnknownError",
+    }));
+  } finally {
+    inferenceWorkerRunning = false;
+  }
+}
 
-  const processMessage = async (data: unknown): Promise<void> => {
-    if (stopping || socket.readyState !== WebSocket.OPEN) return;
-    if (typeof data === "string") {
-      const control = parseVideoStreamControl(data);
-      if (control.type === "ping") {
-        send({ type: "pong", receivedAt: new Date().toISOString() });
-        return;
-      }
-      if (control.type === "stop") {
-        stopping = true;
-        inference?.abort();
-        send({ type: "stopped", chunkCount, byteCount });
-        socket.close(1000, "Stream stopped by client.");
-        return;
-      }
-      if (started) {
-        throw new VideoStreamProtocolError("The stream has already started.");
-      }
-      if (control.mode === "nvidia") {
-        await nvidiaApiKey();
-        inferencePrompt = control.prompt;
-      }
-      started = true;
-      send({
-        type: "started",
-        contentType: control.contentType,
-        mode: control.mode,
-        ...(control.codec ? { codec: control.codec } : {}),
-      });
-      return;
+function validateInferenceFrames(value: unknown): InferenceFrame[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 3) {
+    throw new ApiError(422, "frames must contain one to three images.");
+  }
+  const now = Date.now();
+  const frames = value.map((rawFrame, index) => {
+    if (typeof rawFrame !== "object" || rawFrame === null || Array.isArray(rawFrame)) {
+      throw new ApiError(422, `frames[${index}] must be an object.`);
     }
+    const frame = rawFrame as Record<string, unknown>;
+    const imageId = validateUuid(frame.imageId, `frames[${index}].imageId`);
+    if (typeof frame.capturedAt !== "string") {
+      throw new ApiError(422, `frames[${index}].capturedAt must be an ISO timestamp.`);
+    }
+    const capturedAt = new Date(frame.capturedAt);
+    if (
+      Number.isNaN(capturedAt.getTime()) || capturedAt.toISOString() !== frame.capturedAt ||
+      capturedAt.getTime() < now - 30_000 || capturedAt.getTime() > now + 5_000
+    ) {
+      throw new ApiError(422, `frames[${index}].capturedAt is outside the allowed window.`);
+    }
+    return { imageId, capturedAt: frame.capturedAt };
+  });
+  if (new Set(frames.map((frame) => frame.imageId)).size !== frames.length) {
+    throw new ApiError(422, "frames must not repeat an image.");
+  }
+  if (
+    frames.some(
+      (frame, index) => index > 0 && frame.capturedAt <= frames[index - 1].capturedAt,
+    )
+  ) {
+    throw new ApiError(422, "frames must be ordered by capturedAt.");
+  }
+  return frames;
+}
 
-    if (!started) {
-      throw new VideoStreamProtocolError("Send a start control message before video chunks.");
-    }
-    const byteLength = await videoChunkByteLength(data);
-    if (byteLength === null) {
-      throw new VideoStreamProtocolError("Video chunks must be binary WebSocket messages.");
-    }
-    if (byteLength === 0) {
-      throw new VideoStreamProtocolError("Video chunks must not be empty.");
-    }
-    if (byteLength > maxVideoChunkBytes) {
-      protocolFailure(`Video chunks must not exceed ${maxVideoChunkBytes} bytes.`, 1009);
-      return;
-    }
-    chunkCount += 1;
-    byteCount += byteLength;
-    send({ type: "ack", sequence: chunkCount, byteSize: byteLength, totalBytes: byteCount });
-    if (inferencePrompt !== undefined) {
-      const sequence = chunkCount;
-      if (inference) {
-        send({ type: "dropped", sequence, reason: "model_busy" });
-        return;
-      }
-      const controller = new AbortController();
-      inference = controller;
-      const bytes = data instanceof Blob
-        ? new Uint8Array(await data.arrayBuffer())
-        : data instanceof ArrayBuffer
-        ? new Uint8Array(data)
-        : ArrayBuffer.isView(data)
-        ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
-        : new Uint8Array();
-      const job = analyzeVideoClip(bytes, {
-        apiKey: await nvidiaApiKey(),
-        prompt: inferencePrompt,
-        signal: controller.signal,
-        baseUrl: Deno.env.get("NVIDIA_BASE_URL")?.trim() || undefined,
-        model: Deno.env.get("NVIDIA_VIDEO_MODEL")?.trim() || undefined,
-      }).then((text) => {
-        send({ type: "analysis", sequence, text });
-      }).catch((error) => {
-        if (!controller.signal.aborted) {
-          send({
-            type: "analysis_error",
-            sequence,
-            code: error instanceof VideoModelError ? error.code : "video_model_request_failed",
-          });
-        }
-      }).finally(() => {
-        if (inference === controller) inference = undefined;
-      });
-      const runtime = globalThis as typeof globalThis & {
-        EdgeRuntime?: { waitUntil(promise: Promise<unknown>): void };
-      };
-      runtime.EdgeRuntime?.waitUntil(job);
-    }
-  };
+function validateSequenceNumber(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 9e15) {
+    throw new ApiError(422, "sequenceNumber must be a positive integer.");
+  }
+  return value;
+}
 
-  socket.onmessage = (event) => {
-    if (stopping || socket.readyState !== WebSocket.OPEN) return;
-    if (pendingMessageCount >= maxPendingVideoMessages) {
-      protocolFailure("Too many unacknowledged video stream messages.", 1008);
-      return;
-    }
-    pendingMessageCount += 1;
-    messageQueue = messageQueue
-      .then(() => processMessage(event.data))
-      .catch((error) => {
-        protocolFailure(
-          error instanceof VideoStreamProtocolError
-            ? error.message
-            : "The video stream message could not be processed.",
-        );
-      })
-      .finally(() => {
-        pendingMessageCount -= 1;
-      });
-  };
-  socket.onerror = () => {
-    stopping = true;
-    inference?.abort();
-    if (socket.readyState === WebSocket.OPEN) socket.close(1011, "Video stream failed.");
-  };
-  socket.onclose = (event) => {
-    stopping = true;
-    inference?.abort();
-    closeCode = event.code;
-    if (noticeTimer !== undefined) clearTimeout(noticeTimer);
-    if (closeTimer !== undefined) clearTimeout(closeTimer);
-    resolveClosed();
-    const log: VideoStreamLog = {
-      event: "video_stream_closed",
-      service: "api",
-      environment: requestEnvironment(),
-      request_id: requestId,
-      session_id: sessionId,
-      duration_ms: Math.round((performance.now() - startedAt) * 100) / 100,
-      chunk_count: chunkCount,
-      byte_count: byteCount,
-      close_code: closeCode,
-    };
-    console.info(JSON.stringify(log));
-  };
+function validateTaskRunCommand(value: unknown): TaskRunCommand {
+  if (typeof value !== "string" || !taskRunCommands.has(value as TaskRunCommand)) {
+    throw new ApiError(422, "command is not supported.");
+  }
+  return value as TaskRunCommand;
+}
 
-  const runtime = globalThis as typeof globalThis & {
-    EdgeRuntime?: { waitUntil(promise: Promise<unknown>): void };
-  };
-  runtime.EdgeRuntime?.waitUntil(closed);
-  return response;
+function taskPlanInputError(error: unknown): never {
+  if (error instanceof TaskPlanValidationError) {
+    throw new ApiError(422, error.message, false, "task_plan_invalid", {
+      suggested_action: "Correct the task plan and retry.",
+    });
+  }
+  throw error;
+}
+
+async function handleTaskPlanCreate(request: Request): Promise<Response> {
+  const user = await authenticate(request);
+  const payload = await requestJson(request);
+  const token = validateToken(payload.pairingToken);
+  const clientRequestId = validateUuid(payload.clientRequestId, "clientRequestId");
+  let planInput;
+  try {
+    planInput = validateTaskPlanInput({ title: payload.title, steps: payload.steps });
+  } catch (error) {
+    return taskPlanInputError(error);
+  }
+  await pairingAccess(token, user.id);
+  const plan = await rpc<TaskPlan | null>("edge_api_create_task_plan", {
+    p_task_plan_id: crypto.randomUUID(),
+    p_token_hash: await tokenHash(token),
+    p_owner_id: user.id,
+    p_client_request_id: clientRequestId,
+    p_title: planInput.title,
+    p_source_steps: planInput.steps,
+  });
+  if (!plan) {
+    throw new ApiError(401, "Unknown or expired pairing token. Re-pair on the phone.", true);
+  }
+  if (plan.access === "forbidden") {
+    throw new ApiError(403, "This pairing token belongs to another user.");
+  }
+  return jsonResponse(plan, 201);
+}
+
+async function handleTaskPlanValidation(request: Request, taskPlanId: string): Promise<Response> {
+  const user = await authenticate(request);
+  const plan = await getTaskPlan(taskPlanId, user.id);
+  if (plan.status !== "draft") {
+    throw new ApiError(
+      409,
+      "Only a draft task plan can be validated.",
+      false,
+      "task_plan_not_draft",
+    );
+  }
+  const sourceSteps = plan.sourceSteps;
+  if (!Array.isArray(sourceSteps)) {
+    throw new ApiError(500, "Task plan storage is invalid.", false, "task_plan_storage_invalid");
+  }
+  let input;
+  try {
+    input = validateTaskPlanInput({ title: plan.title, steps: sourceSteps });
+  } catch {
+    throw new ApiError(500, "Task plan storage is invalid.", false, "task_plan_storage_invalid");
+  }
+  let validation;
+  try {
+    validation = await validateTaskPlanWithClaude(
+      awsRegion(),
+      await bedrockCredentials(),
+      input,
+    );
+  } catch (error) {
+    if (error instanceof TaskPlanValidationError) {
+      throw new ApiError(
+        503,
+        "Task plan validation returned an unusable result. Retry shortly.",
+        false,
+        "plan_validation_invalid_response",
+        { model: "us.anthropic.claude-haiku-5-5", suggested_action: "Retry shortly." },
+      );
+    }
+    throw new ApiError(
+      503,
+      "Task plan validation is temporarily unavailable. Retry shortly.",
+      false,
+      "plan_validation_unavailable",
+      {
+        model: "us.anthropic.claude-haiku-5-5",
+        failure_type: error instanceof Error ? error.name : "UnknownError",
+        suggested_action: "Retry shortly.",
+      },
+    );
+  }
+  const saved = await rpc<string>("edge_api_save_task_plan_validation", {
+    p_task_plan_id: taskPlanId,
+    p_owner_id: user.id,
+    p_validation_result: validation,
+  });
+  if (saved !== "saved") {
+    throw new ApiError(
+      409,
+      "Task plan changed before validation completed. Retry.",
+      false,
+      "task_plan_changed",
+    );
+  }
+  return jsonResponse(await getTaskPlan(taskPlanId, user.id));
+}
+
+async function handleTaskPlanApprove(request: Request, taskPlanId: string): Promise<Response> {
+  const user = await authenticate(request);
+  await getTaskPlan(taskPlanId, user.id);
+  const approved = await rpc<string>("edge_api_approve_task_plan", {
+    p_task_plan_id: taskPlanId,
+    p_owner_id: user.id,
+  });
+  if (approved !== "approved") {
+    throw new ApiError(
+      409,
+      "Task plan must have a review without open clarification questions before approval.",
+      false,
+      "task_plan_not_ready",
+    );
+  }
+  return jsonResponse(await getTaskPlan(taskPlanId, user.id));
+}
+
+async function handleTaskRunStart(request: Request): Promise<Response> {
+  const user = await authenticate(request);
+  const payload = await requestJson(request);
+  const taskPlanId = validateUuid(payload.taskPlanId, "taskPlanId");
+  const clientRequestId = validateUuid(payload.clientRequestId, "clientRequestId");
+  const taskRun = await rpc<TaskPlan | null>("edge_api_start_task_run", {
+    p_task_run_id: crypto.randomUUID(),
+    p_task_plan_id: taskPlanId,
+    p_owner_id: user.id,
+    p_client_request_id: clientRequestId,
+  });
+  if (!taskRun) {
+    throw new ApiError(
+      409,
+      "Task plan must be approved and linked to an active pairing before starting.",
+      false,
+      "task_run_not_ready",
+    );
+  }
+  if (typeof taskRun.taskRunId !== "string") {
+    throw new ApiError(500, "Task run storage is invalid.", false, "task_run_storage_invalid");
+  }
+  await rpc<boolean>("edge_api_publish_task_run_start", {
+    p_task_run_id: taskRun.taskRunId,
+    p_owner_id: user.id,
+  });
+  return jsonResponse(taskRun, 201);
+}
+
+async function handleTaskRunCommand(
+  request: Request,
+  taskRunId: string,
+  forcedCommand?: TaskRunCommand,
+): Promise<Response> {
+  const user = await authenticate(request);
+  const payload = await requestJson(request);
+  const command = forcedCommand ?? validateTaskRunCommand(payload.command);
+  const result = await rpc<TaskRun>("edge_api_apply_task_run_command", {
+    p_command_id: crypto.randomUUID(),
+    p_task_run_id: taskRunId,
+    p_owner_id: user.id,
+    p_client_request_id: validateUuid(payload.clientRequestId, "clientRequestId"),
+    p_command: command,
+    p_expected_state_version: validateStateVersion(payload.expectedStateVersion),
+  });
+  const outcome = result.outcome;
+  if (outcome === "not_found") {
+    throw new ApiError(404, "Task run not found.", false, "task_run_not_found");
+  }
+  if (outcome === "stale") {
+    throw new ApiError(409, "Task run state changed. Refresh and retry.", false, "task_run_stale", {
+      state_version: typeof result.stateVersion === "number" ? result.stateVersion : 0,
+    });
+  }
+  if (outcome === "command_limit") {
+    throw new ApiError(429, "Task run command limit reached.", false, "task_run_command_limit");
+  }
+  if (outcome !== "applied") {
+    throw new ApiError(
+      409,
+      "Command is not valid for the current task run state.",
+      false,
+      "task_run_invalid_transition",
+    );
+  }
+  return jsonResponse(result);
+}
+
+async function handleInferenceWindow(request: Request, taskRunId: string): Promise<Response> {
+  const user = await authenticate(request);
+  const payload = await requestJson(request);
+  const frames = validateInferenceFrames(payload.frames);
+  const result = await rpc<TaskRun>("edge_api_create_task_inference_window", {
+    p_window_id: crypto.randomUUID(),
+    p_task_run_id: taskRunId,
+    p_owner_id: user.id,
+    p_client_request_id: validateUuid(payload.clientRequestId, "clientRequestId"),
+    p_sequence_number: validateSequenceNumber(payload.sequenceNumber),
+    p_observed_state_version: validateStateVersion(payload.expectedStateVersion),
+    p_image_ids: frames.map((frame) => frame.imageId),
+    p_captured_at: frames.map((frame) => frame.capturedAt),
+  });
+  if (result.outcome === "not_found") {
+    throw new ApiError(404, "Task run not found.", false, "task_run_not_found");
+  }
+  if (result.outcome === "stale") {
+    throw new ApiError(409, "Task run state changed. Refresh and retry.", false, "task_run_stale", {
+      state_version: typeof result.stateVersion === "number" ? result.stateVersion : 0,
+    });
+  }
+  if (result.outcome === "out_of_order") {
+    throw new ApiError(
+      409,
+      "Inference window sequence is out of order.",
+      false,
+      "window_out_of_order",
+    );
+  }
+  if (result.outcome === "invalid_media") {
+    throw new ApiError(
+      422,
+      "Frames must belong to this active pairing.",
+      false,
+      "window_media_invalid",
+    );
+  }
+  if (result.outcome !== "accepted") {
+    throw new ApiError(
+      409,
+      "Task run is not accepting inference windows.",
+      false,
+      "task_run_not_active",
+    );
+  }
+  return jsonResponse(result, 202);
 }
 
 function routePath(pathname: string): string {
@@ -1258,6 +1699,11 @@ function routePath(pathname: string): string {
   if (pathname === "/api") return "/";
   if (pathname.startsWith("/api/")) return pathname.slice(4);
   return pathname;
+}
+
+if (Deno.env.get("APP_ENV") === "aws") {
+  void processTaskInferenceWindow();
+  setInterval(() => void processTaskInferenceWindow(), 2_000);
 }
 
 Deno.serve(async (request: Request) => {
@@ -1286,12 +1732,55 @@ Deno.serve(async (request: Request) => {
       response = await handleChat(request);
     } else if (request.method === "POST" && path === "/v1/images") {
       response = await handleImageUpload(request, url);
-    } else if (request.method === "GET" && path === "/v1/video-stream") {
-      response = await handleVideoStream(request, url, requestId);
+    } else if (request.method === "POST" && path === "/v1/task-plans") {
+      response = await handleTaskPlanCreate(request);
+    } else if (request.method === "POST" && path === "/v1/task-runs") {
+      response = await handleTaskRunStart(request);
     } else {
       const imageDelete = path.match(/^\/v1\/images\/([^/]+)$/);
+      const taskPlan = path.match(/^\/v1\/task-plans\/([^/]+)$/);
+      const taskPlanAction = path.match(/^\/v1\/task-plans\/([^/]+)\/(approve|validate)$/);
+      const taskRun = path.match(/^\/v1\/task-runs\/([^/]+)$/);
+      const taskRunAction = path.match(/^\/v1\/task-runs\/([^/]+)\/(commands|stop)$/);
+      const inferenceWindow = path.match(/^\/v1\/task-runs\/([^/]+)\/inference-windows$/);
       if (request.method === "DELETE" && imageDelete) {
         response = await handleImageDelete(request, url, imageDelete[1]);
+      } else if (request.method === "GET" && taskPlan) {
+        const user = await authenticate(request);
+        response = jsonResponse(
+          await getTaskPlan(validateUuid(taskPlan[1], "taskPlanId"), user.id),
+        );
+      } else if (request.method === "POST" && taskPlanAction?.[2] === "validate") {
+        response = await handleTaskPlanValidation(
+          request,
+          validateUuid(taskPlanAction[1], "taskPlanId"),
+        );
+      } else if (request.method === "POST" && taskPlanAction?.[2] === "approve") {
+        response = await handleTaskPlanApprove(
+          request,
+          validateUuid(taskPlanAction[1], "taskPlanId"),
+        );
+      } else if (request.method === "GET" && taskRun) {
+        const user = await authenticate(request);
+        response = jsonResponse(
+          await getTaskRun(validateUuid(taskRun[1], "taskRunId"), user.id),
+        );
+      } else if (request.method === "POST" && taskRunAction?.[2] === "commands") {
+        response = await handleTaskRunCommand(
+          request,
+          validateUuid(taskRunAction[1], "taskRunId"),
+        );
+      } else if (request.method === "POST" && taskRunAction?.[2] === "stop") {
+        response = await handleTaskRunCommand(
+          request,
+          validateUuid(taskRunAction[1], "taskRunId"),
+          "stop",
+        );
+      } else if (request.method === "POST" && inferenceWindow) {
+        response = await handleInferenceWindow(
+          request,
+          validateUuid(inferenceWindow[1], "taskRunId"),
+        );
       } else {
         throw new ApiError(404, "Not found.");
       }

@@ -58,6 +58,8 @@ def test_api_uses_cognito_authentication_and_permissive_cors() -> None:
     assert "SUPABASE_SERVICE_ROLE_KEY" not in source
     assert 'role: "system"' not in source
     assert "systemPrompt" not in source
+    assert "/v1/video-stream" not in source
+    assert "upgradeWebSocket" not in source
 
 
 def test_edge_api_supports_stateless_byok_without_system_injection() -> None:
@@ -126,7 +128,8 @@ def test_cd_deploys_to_ec2_through_oidc_and_ssm() -> None:
     assert "docker push" in workflow
     assert "aws ssm send-command" in workflow
     assert "aws ssm wait command-executed" in workflow
-    assert "127.0.0.1:8000:8000" in workflow
+    assert "-p 8000:8000" in workflow
+    assert "http://127.0.0.1:8000/healthz" in workflow
     assert "supabase@2.116.0" not in workflow
 
 
@@ -153,3 +156,127 @@ def test_compute_bootstrap_writes_non_secret_runtime_configuration() -> None:
         in template
     )
     assert not (ROOT / ".github" / "workflows" / "cd.yml").exists()
+
+
+def test_aws_database_foundation_has_a_private_cost_optimized_rds_instance() -> None:
+    template = (ROOT / "infrastructure" / "aws" / "database-foundation.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CostOptimizedDatabase:" in template
+    assert "DBInstanceClass: db.t4g.micro" in template
+    assert "Engine: postgres" in template
+    assert "EnableIAMDatabaseAuthentication: true" in template
+    assert "MultiAZ: false" in template
+    assert "PubliclyAccessible: false" in template
+    assert "StorageEncrypted: true" in template
+    assert "DeletionProtection: true" in template
+    assert "DatabaseResourceId" in template
+
+
+def test_compute_iam_policy_targets_one_specific_database_resource() -> None:
+    template = (ROOT / "infrastructure" / "aws" / "compute-foundation.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "DatabaseResourceId:" in template
+    assert "${DatabaseResourceId}/metaglasses_api" in template
+    assert "DatabaseClusterResourceId" not in template
+
+
+def test_rds_bootstrap_uses_iam_only_application_authentication() -> None:
+    role_sql = (ROOT / "database" / "bootstrap" / "0001_create_application_role.sql").read_text(
+        encoding="utf-8"
+    )
+    grants_sql = (
+        ROOT / "database" / "bootstrap" / "0002_grant_application_access.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "create role metaglasses_api login" in role_sql
+    assert "grant rds_iam to metaglasses_api" in role_sql
+    assert "revoke create on schema public from public" in role_sql
+    assert "grant usage on schema app to metaglasses_api" in grants_sql
+    assert "grant select on table app.schema_migrations to metaglasses_api" in grants_sql
+    assert "grant execute on all functions in schema app to metaglasses_api" in grants_sql
+    migrator_sql = (
+        ROOT / "database" / "bootstrap" / "0003_create_migration_role.sql"
+    ).read_text(encoding="utf-8")
+    assert "create role metaglasses_migrator login" in migrator_sql
+    assert "grant usage, create on schema app to metaglasses_migrator" in migrator_sql
+    assert (
+        "grant select, insert on table app.schema_migrations to metaglasses_migrator"
+        in migrator_sql
+    )
+    assert "password" not in role_sql.lower()
+
+
+def test_aws_api_gateway_foundation_keeps_compute_private() -> None:
+    template = (
+        ROOT / "infrastructure" / "aws" / "public-api-foundation.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "Type: AWS::ApiGatewayV2::Api" in template
+    assert "Type: AWS::ApiGatewayV2::VpcLink" in template
+    assert "Scheme: internal" in template
+    assert "DisableExecuteApiEndpoint: false" in template
+    assert "CidrIp: 0.0.0.0/0" not in template
+    assert "TimeoutInMillis: 30000" in template
+    assert "RouteKey: $default" in template
+
+
+def test_aws_runtime_uses_a_timeout_inside_api_gateway_limit() -> None:
+    api_source = (ROOT / "supabase" / "functions" / "api" / "index.ts").read_text(
+        encoding="utf-8"
+    )
+    provider_source = (
+        ROOT / "supabase" / "functions" / "api" / "providers.ts"
+    ).read_text(encoding="utf-8")
+
+    assert 'Deno.env.get("APP_ENV") === "aws" ? 20_000' in api_source
+    assert 'return Deno.env.get("APP_ENV") === "aws" ? 20_000' in provider_source
+
+
+def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() -> None:
+    api_source = (ROOT / "supabase" / "functions" / "api" / "index.ts").read_text(
+        encoding="utf-8"
+    )
+    validator_source = (
+        ROOT / "supabase" / "functions" / "api" / "task_plan.ts"
+    ).read_text(encoding="utf-8")
+    migration = (ROOT / "database" / "migrations" / "0002_task_plans.sql").read_text(
+        encoding="utf-8"
+    )
+    command_migration = (
+        ROOT / "database" / "migrations" / "0003_task_run_commands.sql"
+    ).read_text(encoding="utf-8")
+    inference_migration = (
+        ROOT / "database" / "migrations" / "0004_task_inference_windows.sql"
+    ).read_text(encoding="utf-8")
+    observation_migration = (
+        ROOT / "database" / "migrations" / "0005_task_inference_observations.sql"
+    ).read_text(encoding="utf-8")
+    start_migration = (
+        ROOT / "database" / "migrations" / "0006_publish_task_run_start.sql"
+    ).read_text(encoding="utf-8")
+    template = (ROOT / "infrastructure" / "aws" / "compute-foundation.yaml").read_text(
+        encoding="utf-8"
+    )
+    workflow = (ROOT / ".github" / "workflows" / "aws-deploy.yml").read_text(encoding="utf-8")
+
+    assert '"us.anthropic.claude-haiku-5-5"' in validator_source
+    assert "validateModelPlan" in validator_source
+    assert "POST\" && path === \"/v1/task-plans\"" in api_source
+    assert "POST\" && path === \"/v1/task-runs\"" in api_source
+    assert "create table app.task_plans" in migration
+    assert "grant execute on function app.start_task_run" in migration
+    assert "create table app.task_run_commands" in command_migration
+    assert "create or replace function app.apply_task_run_command" in command_migration
+    assert "create table app.task_inference_windows" in inference_migration
+    assert "create_task_inference_window" in inference_migration
+    assert "claim_task_inference_window" in observation_migration
+    assert "complete_task_inference_window" in observation_migration
+    assert "publish_task_run_start" in start_migration
+    assert "bedrock:InvokeModel" in template
+    assert "us.amazon.nova-lite-v1:0" in template
+    assert "DATABASE_MIGRATOR_USER=metaglasses_migrator" in template
+    assert "supabase/functions/migrate.ts" in workflow
