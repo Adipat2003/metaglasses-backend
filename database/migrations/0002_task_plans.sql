@@ -291,7 +291,7 @@ as $$
             1,
             1
         from eligible_plan as eligible
-        on conflict do update
+        on conflict (owner_id, client_request_id) do update
         set updated_at = excluded.updated_at
         returning id, task_plan_id, task_plan_version, status, current_step_ordinal, state_version, created_at
     )
