@@ -187,7 +187,8 @@ user:
 either a clarification result on the draft or moves the plan to `awaiting_approval`. Approval moves
 only that exact validated version to `approved`; `POST /v1/task-runs` then accepts its `taskPlanId`
 and a retry-stable `clientRequestId`, then returns the first lens instruction. The client must not
-start camera capture until that response has been received.
+start camera capture until that response has been received. The API also publishes that first
+instruction through the existing glasses display route.
 
 `POST /v1/task-runs` requires an approved plan version and an active pairing. The current slice
 returns a task-run ID, initial state version, and initial lens instruction. A later media-ingestion

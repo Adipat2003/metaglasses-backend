@@ -475,6 +475,10 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
           ownerId
         }) as result
         `)[0].result as T;
+      case "edge_api_publish_task_run_start":
+        return (await database`
+          select app.publish_task_run_start(${parameters.p_task_run_id as string}, ${ownerId}) as result
+        `)[0].result as T;
       default:
         throw new Error(`Unsupported database operation: ${name}`);
     }
@@ -1580,6 +1584,13 @@ async function handleTaskRunStart(request: Request): Promise<Response> {
       "task_run_not_ready",
     );
   }
+  if (typeof taskRun.taskRunId !== "string") {
+    throw new ApiError(500, "Task run storage is invalid.", false, "task_run_storage_invalid");
+  }
+  await rpc<boolean>("edge_api_publish_task_run_start", {
+    p_task_run_id: taskRun.taskRunId,
+    p_owner_id: user.id,
+  });
   return jsonResponse(taskRun, 201);
 }
 

@@ -255,6 +255,9 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     observation_migration = (
         ROOT / "database" / "migrations" / "0005_task_inference_observations.sql"
     ).read_text(encoding="utf-8")
+    start_migration = (
+        ROOT / "database" / "migrations" / "0006_publish_task_run_start.sql"
+    ).read_text(encoding="utf-8")
     template = (ROOT / "infrastructure" / "aws" / "compute-foundation.yaml").read_text(
         encoding="utf-8"
     )
@@ -272,6 +275,7 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     assert "create_task_inference_window" in inference_migration
     assert "claim_task_inference_window" in observation_migration
     assert "complete_task_inference_window" in observation_migration
+    assert "publish_task_run_start" in start_migration
     assert "bedrock:InvokeModel" in template
     assert "us.amazon.nova-lite-v1:0" in template
     assert "DATABASE_MIGRATOR_USER=metaglasses_migrator" in template
