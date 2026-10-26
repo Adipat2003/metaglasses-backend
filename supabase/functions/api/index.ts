@@ -20,6 +20,11 @@ import {
   parseExternalProvider,
   ProviderConfigurationError,
 } from "./providers.ts";
+import {
+  TaskPlanValidationError,
+  validateTaskPlanInput,
+  validateTaskPlanWithClaude,
+} from "./task_plan.ts";
 
 const pairingTtlSeconds = 3600;
 const maxImageBytes = 8 * 1024 * 1024;
@@ -120,6 +125,10 @@ function requestEnvironment(): "local" | "aws" | "unknown" {
 
 function normalizedRoute(path: string): string {
   if (/^\/v1\/images\/[^/]+$/.test(path)) return "/v1/images/:imageId";
+  if (/^\/v1\/task-plans\/[^/]+$/.test(path)) return "/v1/task-plans/:taskPlanId";
+  if (/^\/v1\/task-plans\/[^/]+\/(approve|validate)$/.test(path)) {
+    return "/v1/task-plans/:taskPlanId/:action";
+  }
   return path;
 }
 
@@ -361,6 +370,49 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
       case "edge_api_remove_image":
         return await database`select * from app.remove_image(${tokenHash}, ${ownerId}, ${parameters
           .p_image_id as string})` as T;
+      case "edge_api_create_task_plan": {
+        const sourceSteps = JSON.stringify(parameters.p_source_steps);
+        return (await database`
+          select app.create_task_plan(
+            ${parameters.p_task_plan_id as string},
+            ${tokenHash},
+            ${ownerId},
+            ${parameters.p_client_request_id as string},
+            ${parameters.p_title as string},
+            ${sourceSteps}::jsonb
+          ) as result
+        `)[0].result as T;
+      }
+      case "edge_api_get_task_plan": {
+        return (await database`
+          select app.task_plan_view(${parameters.p_task_plan_id as string}, ${ownerId}) as result
+        `)[0].result as T;
+      }
+      case "edge_api_save_task_plan_validation": {
+        const validationResult = JSON.stringify(parameters.p_validation_result);
+        return (await database`
+          select app.save_task_plan_validation(
+            ${parameters.p_task_plan_id as string},
+            ${ownerId},
+            ${validationResult}::jsonb
+          ) as result
+        `)[0].result as T;
+      }
+      case "edge_api_approve_task_plan": {
+        return (await database`
+          select app.approve_task_plan(${parameters.p_task_plan_id as string}, ${ownerId}) as result
+        `)[0].result as T;
+      }
+      case "edge_api_start_task_run": {
+        return (await database`
+          select app.start_task_run(
+            ${parameters.p_task_run_id as string},
+            ${parameters.p_task_plan_id as string},
+            ${ownerId},
+            ${parameters.p_client_request_id as string}
+          ) as result
+        `)[0].result as T;
+      }
       default:
         throw new Error(`Unsupported database operation: ${name}`);
     }
@@ -1022,6 +1074,178 @@ async function handleImageDelete(
   return emptyResponse(204);
 }
 
+type TaskPlan = Record<string, unknown>;
+
+async function bedrockCredentials(): Promise<{
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+}> {
+  const credentials = await s3.config.credentials();
+  if (!credentials || !credentials.accessKeyId || !credentials.secretAccessKey) {
+    throw new ApiError(
+      503,
+      "AWS model credentials are unavailable.",
+      false,
+      "model_credentials_unavailable",
+    );
+  }
+  return credentials;
+}
+
+async function getTaskPlan(taskPlanId: string, ownerId: string): Promise<TaskPlan> {
+  const plan = await rpc<TaskPlan | null>("edge_api_get_task_plan", {
+    p_task_plan_id: taskPlanId,
+    p_owner_id: ownerId,
+  });
+  if (!plan) throw new ApiError(404, "Task plan not found.", false, "task_plan_not_found");
+  return plan;
+}
+
+function taskPlanInputError(error: unknown): never {
+  if (error instanceof TaskPlanValidationError) {
+    throw new ApiError(422, error.message, false, "task_plan_invalid", {
+      suggested_action: "Correct the task plan and retry.",
+    });
+  }
+  throw error;
+}
+
+async function handleTaskPlanCreate(request: Request): Promise<Response> {
+  const user = await authenticate(request);
+  const payload = await requestJson(request);
+  const token = validateToken(payload.pairingToken);
+  const clientRequestId = validateUuid(payload.clientRequestId, "clientRequestId");
+  let planInput;
+  try {
+    planInput = validateTaskPlanInput({ title: payload.title, steps: payload.steps });
+  } catch (error) {
+    return taskPlanInputError(error);
+  }
+  await pairingAccess(token, user.id);
+  const plan = await rpc<TaskPlan | null>("edge_api_create_task_plan", {
+    p_task_plan_id: crypto.randomUUID(),
+    p_token_hash: await tokenHash(token),
+    p_owner_id: user.id,
+    p_client_request_id: clientRequestId,
+    p_title: planInput.title,
+    p_source_steps: planInput.steps,
+  });
+  if (!plan) {
+    throw new ApiError(401, "Unknown or expired pairing token. Re-pair on the phone.", true);
+  }
+  if (plan.access === "forbidden") {
+    throw new ApiError(403, "This pairing token belongs to another user.");
+  }
+  return jsonResponse(plan, 201);
+}
+
+async function handleTaskPlanValidation(request: Request, taskPlanId: string): Promise<Response> {
+  const user = await authenticate(request);
+  const plan = await getTaskPlan(taskPlanId, user.id);
+  if (plan.status !== "draft") {
+    throw new ApiError(
+      409,
+      "Only a draft task plan can be validated.",
+      false,
+      "task_plan_not_draft",
+    );
+  }
+  const sourceSteps = plan.sourceSteps;
+  if (!Array.isArray(sourceSteps)) {
+    throw new ApiError(500, "Task plan storage is invalid.", false, "task_plan_storage_invalid");
+  }
+  let input;
+  try {
+    input = validateTaskPlanInput({ title: plan.title, steps: sourceSteps });
+  } catch {
+    throw new ApiError(500, "Task plan storage is invalid.", false, "task_plan_storage_invalid");
+  }
+  let validation;
+  try {
+    validation = await validateTaskPlanWithClaude(
+      awsRegion(),
+      await bedrockCredentials(),
+      input,
+    );
+  } catch (error) {
+    if (error instanceof TaskPlanValidationError) {
+      throw new ApiError(
+        503,
+        "Task plan validation returned an unusable result. Retry shortly.",
+        false,
+        "plan_validation_invalid_response",
+        { model: "us.anthropic.claude-haiku-5-5", suggested_action: "Retry shortly." },
+      );
+    }
+    throw new ApiError(
+      503,
+      "Task plan validation is temporarily unavailable. Retry shortly.",
+      false,
+      "plan_validation_unavailable",
+      {
+        model: "us.anthropic.claude-haiku-5-5",
+        failure_type: error instanceof Error ? error.name : "UnknownError",
+        suggested_action: "Retry shortly.",
+      },
+    );
+  }
+  const saved = await rpc<string>("edge_api_save_task_plan_validation", {
+    p_task_plan_id: taskPlanId,
+    p_owner_id: user.id,
+    p_validation_result: validation,
+  });
+  if (saved !== "saved") {
+    throw new ApiError(
+      409,
+      "Task plan changed before validation completed. Retry.",
+      false,
+      "task_plan_changed",
+    );
+  }
+  return jsonResponse(await getTaskPlan(taskPlanId, user.id));
+}
+
+async function handleTaskPlanApprove(request: Request, taskPlanId: string): Promise<Response> {
+  const user = await authenticate(request);
+  await getTaskPlan(taskPlanId, user.id);
+  const approved = await rpc<string>("edge_api_approve_task_plan", {
+    p_task_plan_id: taskPlanId,
+    p_owner_id: user.id,
+  });
+  if (approved !== "approved") {
+    throw new ApiError(
+      409,
+      "Task plan must have a review without open clarification questions before approval.",
+      false,
+      "task_plan_not_ready",
+    );
+  }
+  return jsonResponse(await getTaskPlan(taskPlanId, user.id));
+}
+
+async function handleTaskRunStart(request: Request): Promise<Response> {
+  const user = await authenticate(request);
+  const payload = await requestJson(request);
+  const taskPlanId = validateUuid(payload.taskPlanId, "taskPlanId");
+  const clientRequestId = validateUuid(payload.clientRequestId, "clientRequestId");
+  const taskRun = await rpc<TaskPlan | null>("edge_api_start_task_run", {
+    p_task_run_id: crypto.randomUUID(),
+    p_task_plan_id: taskPlanId,
+    p_owner_id: user.id,
+    p_client_request_id: clientRequestId,
+  });
+  if (!taskRun) {
+    throw new ApiError(
+      409,
+      "Task plan must be approved and linked to an active pairing before starting.",
+      false,
+      "task_run_not_ready",
+    );
+  }
+  return jsonResponse(taskRun, 201);
+}
+
 function routePath(pathname: string): string {
   const functionPrefix = "/functions/v1/api";
   if (pathname.startsWith(functionPrefix)) {
@@ -1058,10 +1282,31 @@ Deno.serve(async (request: Request) => {
       response = await handleChat(request);
     } else if (request.method === "POST" && path === "/v1/images") {
       response = await handleImageUpload(request, url);
+    } else if (request.method === "POST" && path === "/v1/task-plans") {
+      response = await handleTaskPlanCreate(request);
+    } else if (request.method === "POST" && path === "/v1/task-runs") {
+      response = await handleTaskRunStart(request);
     } else {
       const imageDelete = path.match(/^\/v1\/images\/([^/]+)$/);
+      const taskPlan = path.match(/^\/v1\/task-plans\/([^/]+)$/);
+      const taskPlanAction = path.match(/^\/v1\/task-plans\/([^/]+)\/(approve|validate)$/);
       if (request.method === "DELETE" && imageDelete) {
         response = await handleImageDelete(request, url, imageDelete[1]);
+      } else if (request.method === "GET" && taskPlan) {
+        const user = await authenticate(request);
+        response = jsonResponse(
+          await getTaskPlan(validateUuid(taskPlan[1], "taskPlanId"), user.id),
+        );
+      } else if (request.method === "POST" && taskPlanAction?.[2] === "validate") {
+        response = await handleTaskPlanValidation(
+          request,
+          validateUuid(taskPlanAction[1], "taskPlanId"),
+        );
+      } else if (request.method === "POST" && taskPlanAction?.[2] === "approve") {
+        response = await handleTaskPlanApprove(
+          request,
+          validateUuid(taskPlanAction[1], "taskPlanId"),
+        );
       } else {
         throw new ApiError(404, "Not found.");
       }

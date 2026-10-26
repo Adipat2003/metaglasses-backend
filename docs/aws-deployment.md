@@ -86,10 +86,16 @@ The RDS instance is a single-AZ `db.t4g.micro` PostgreSQL 17.9 instance with 20 
 seven-day backups, encryption, deletion protection, and no public endpoint. The API authenticates
 as `metaglasses_api` with short-lived IAM database tokens. It has no direct table access: it can
 only execute the application functions in the private `app` schema and read the migration ledger.
+The deployment runs the pinned migration container before replacing the healthy API container. A
+migration failure leaves the existing API running and prevents the new image from being selected.
 
-The one-time bootstrap scripts in `database/bootstrap/` create that role and grant its minimal
-permissions. `database/migrations/0001_initial.sql` is the AWS-native schema used by the API; it
-does not depend on Supabase Auth, Storage, or extensions.
+The one-time bootstrap scripts in `database/bootstrap/` create that role and a separate
+`metaglasses_migrator` role. The migrator can create objects only in `app`, write the migration
+ledger, and has the narrow pairing-table privileges needed to own task-plan security-definer
+functions. It cannot access the public schema. Run bootstrap scripts in numeric order with the
+database administrator before enabling automatic deployments. `database/migrations/0001_initial.sql`
+is the AWS-native schema used by the API; it does not depend on Supabase Auth, Storage, or
+extensions.
 
 ## Deploy application code
 
@@ -97,10 +103,12 @@ Pushing a merged commit to `main` triggers `.github/workflows/aws-deploy.yml`.
 
 1. GitHub Actions assumes the AWS deploy role through OIDC. No static AWS key is stored in GitHub.
 2. The workflow builds the Deno container and pushes an immutable commit-SHA tag to ECR.
-3. It sends an SSM command to EC2 to pull and start that image.
-4. The container listens on port 8000. The EC2 security group accepts that port only from the
+3. It sends an SSM command to EC2 to pull the image and apply unapplied migrations as the separate
+   IAM-authenticated migrator role. A migration failure leaves the previous API container running.
+4. It starts that image after the migration succeeds.
+5. The container listens on port 8000. The EC2 security group accepts that port only from the
    internal ALB.
-5. The workflow checks `http://127.0.0.1:8000/healthz` on EC2 and fails if the container does not
+6. The workflow checks `http://127.0.0.1:8000/healthz` on EC2 and fails if the container does not
    become healthy.
 
 The workflow needs the GitHub repository variable `METAGLASSES_AWS_DEPLOY_ROLE_ARN`, set to the

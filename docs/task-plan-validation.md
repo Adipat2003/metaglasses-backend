@@ -3,7 +3,9 @@
 ## Status and decision
 
 This document defines the target architecture for user-authored task plans and live visual
-guidance. It is a design contract, not an implemented API.
+guidance. The first backend slice implements structured-list plan creation, Claude validation,
+review, approval, and task-run creation. Free-form parsing, commands, media ingestion, and visual
+inference remain planned work.
 
 The plan-validation model is **Claude Haiku 5.5** through the US geographic Bedrock inference
 profile:
@@ -154,21 +156,42 @@ These routes are additions. They do not change existing `/v1/state`, `/v1/displa
 or `/v1/chat` response shapes.
 
 ```text
-POST /v1/task-plans
-GET  /v1/task-plans/{taskPlanId}
-PATCH /v1/task-plans/{taskPlanId}/draft
-POST /v1/task-plans/{taskPlanId}/validate
-POST /v1/task-plans/{taskPlanId}/approve
-POST /v1/task-runs
+POST /v1/task-plans                         implemented for structured lists
+GET  /v1/task-plans/{taskPlanId}            implemented
+PATCH /v1/task-plans/{taskPlanId}/draft     planned
+POST /v1/task-plans/{taskPlanId}/validate   implemented
+POST /v1/task-plans/{taskPlanId}/approve    implemented
+POST /v1/task-runs                          implemented
 GET  /v1/task-runs/{taskRunId}
 POST /v1/task-runs/{taskRunId}/commands
 POST /v1/task-runs/{taskRunId}/inference-windows
 POST /v1/task-runs/{taskRunId}/stop
 ```
 
-`POST /v1/task-runs` requires an approved plan version and an active pairing. It returns a task-run
-ID, initial state version, initial lens instruction, upload constraints, and short-lived scoped
-media-upload authorization.
+The implemented structured-list request is deliberately small and idempotent for an authenticated
+user:
+
+```json
+{
+  "pairingToken": "<active pairing token>",
+  "clientRequestId": "<UUID reused when retrying this create request>",
+  "title": "Install shelf bracket",
+  "steps": [
+    { "instruction": "Hold the bracket against the marked wall position." },
+    { "instruction": "Check that the bracket is level." }
+  ]
+}
+```
+
+`POST /v1/task-plans/{taskPlanId}/validate` invokes only the fixed Claude Haiku profile. It saves
+either a clarification result on the draft or moves the plan to `awaiting_approval`. Approval moves
+only that exact validated version to `approved`; `POST /v1/task-runs` then accepts its `taskPlanId`
+and a retry-stable `clientRequestId`, then returns the first lens instruction. The client must not
+start camera capture until that response has been received.
+
+`POST /v1/task-runs` requires an approved plan version and an active pairing. The current slice
+returns a task-run ID, initial state version, and initial lens instruction. A later media-ingestion
+slice adds upload constraints and short-lived scoped media-upload authorization.
 
 `POST /v1/task-runs/{taskRunId}/commands` accepts only this allowlist:
 

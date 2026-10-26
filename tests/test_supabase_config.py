@@ -198,6 +198,15 @@ def test_rds_bootstrap_uses_iam_only_application_authentication() -> None:
     assert "grant usage on schema app to metaglasses_api" in grants_sql
     assert "grant select on table app.schema_migrations to metaglasses_api" in grants_sql
     assert "grant execute on all functions in schema app to metaglasses_api" in grants_sql
+    migrator_sql = (
+        ROOT / "database" / "bootstrap" / "0003_create_migration_role.sql"
+    ).read_text(encoding="utf-8")
+    assert "create role metaglasses_migrator login" in migrator_sql
+    assert "grant usage, create on schema app to metaglasses_migrator" in migrator_sql
+    assert (
+        "grant select, insert on table app.schema_migrations to metaglasses_migrator"
+        in migrator_sql
+    )
     assert "password" not in role_sql.lower()
 
 
@@ -225,3 +234,29 @@ def test_aws_runtime_uses_a_timeout_inside_api_gateway_limit() -> None:
 
     assert 'Deno.env.get("APP_ENV") === "aws" ? 20_000' in api_source
     assert 'return Deno.env.get("APP_ENV") === "aws" ? 20_000' in provider_source
+
+
+def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() -> None:
+    api_source = (ROOT / "supabase" / "functions" / "api" / "index.ts").read_text(
+        encoding="utf-8"
+    )
+    validator_source = (
+        ROOT / "supabase" / "functions" / "api" / "task_plan.ts"
+    ).read_text(encoding="utf-8")
+    migration = (ROOT / "database" / "migrations" / "0002_task_plans.sql").read_text(
+        encoding="utf-8"
+    )
+    template = (ROOT / "infrastructure" / "aws" / "compute-foundation.yaml").read_text(
+        encoding="utf-8"
+    )
+    workflow = (ROOT / ".github" / "workflows" / "aws-deploy.yml").read_text(encoding="utf-8")
+
+    assert '"us.anthropic.claude-haiku-5-5"' in validator_source
+    assert "validateModelPlan" in validator_source
+    assert "POST\" && path === \"/v1/task-plans\"" in api_source
+    assert "POST\" && path === \"/v1/task-runs\"" in api_source
+    assert "create table app.task_plans" in migration
+    assert "grant execute on function app.start_task_run" in migration
+    assert "bedrock:InvokeModel" in template
+    assert "DATABASE_MIGRATOR_USER=metaglasses_migrator" in template
+    assert "supabase/functions/migrate.ts" in workflow

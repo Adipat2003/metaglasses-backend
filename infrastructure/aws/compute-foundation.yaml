@@ -111,8 +111,16 @@ Resources:
                 Action: secretsmanager:GetSecretValue
                 Resource: !Ref NvidiaSecretArn
               - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.anthropic.claude-haiku-5-5"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/anthropic.claude-haiku-5-5"
+              - Effect: Allow
                 Action: rds-db:connect
                 Resource: !Sub "arn:${AWS::Partition}:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${DatabaseResourceId}/metaglasses_api"
+              - Effect: Allow
+                Action: rds-db:connect
+                Resource: !Sub "arn:${AWS::Partition}:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${DatabaseResourceId}/metaglasses_migrator"
 
   ApiInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -150,6 +158,7 @@ Resources:
               DATABASE_HOST=${DatabaseHost}
               DATABASE_PORT=5432
               DATABASE_NAME=metaglasses
+              DATABASE_MIGRATOR_USER=metaglasses_migrator
               PAIRING_IMAGE_BUCKET=${PairingImagesBucketName}
               NVIDIA_SECRET_ARN=${NvidiaSecretArn}
               NVIDIA_MODEL=meta/llama-3.2-90b-vision-instruct
