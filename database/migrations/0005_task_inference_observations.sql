@@ -38,14 +38,14 @@ declare
     candidate app.task_inference_windows%rowtype;
     run_record app.task_runs%rowtype;
 begin
-    select window into candidate
-    from app.task_inference_windows as window
-    where window.status = 'queued'
+    select inference_window into candidate
+    from app.task_inference_windows as inference_window
+    where inference_window.status = 'queued'
        or (
-            window.status = 'processing'
-            and window.processing_at <= statement_timestamp() - interval '30 seconds'
+            inference_window.status = 'processing'
+            and inference_window.processing_at <= statement_timestamp() - interval '30 seconds'
        )
-    order by window.created_at, window.id
+    order by inference_window.created_at, inference_window.id
     for update skip locked
     limit 1;
     if not found then
@@ -104,20 +104,20 @@ security definer
 set search_path = pg_catalog, app
 as $$
     with completed as (
-        update app.task_inference_windows as window
+        update app.task_inference_windows as inference_window
         set status = 'observed', processing_at = null
         from app.task_runs as run
         join app.pairings as pairing
           on pairing.token_hash = run.token_hash
          and pairing.owner_id = p_owner_id
          and pairing.expires_at > statement_timestamp()
-        where window.id = p_inference_window_id
-          and window.task_run_id = run.id
-          and window.owner_id = p_owner_id
-          and window.status = 'processing'
+        where inference_window.id = p_inference_window_id
+          and inference_window.task_run_id = run.id
+          and inference_window.owner_id = p_owner_id
+          and inference_window.status = 'processing'
           and run.status = 'active'
-          and run.state_version = window.observed_state_version
-        returning window.id, window.task_run_id
+          and run.state_version = inference_window.observed_state_version
+        returning inference_window.id, inference_window.task_run_id
     ), inserted as (
         insert into app.task_inference_observations (
             id, task_inference_window_id, task_run_id, owner_id, model_id, observation
@@ -163,11 +163,11 @@ security definer
 set search_path = pg_catalog, app
 as $$
     with rejected as (
-        update app.task_inference_windows as window
+        update app.task_inference_windows as inference_window
         set status = 'rejected', processing_at = null
-        where window.id = p_inference_window_id
-          and window.owner_id = p_owner_id
-          and window.status = 'processing'
+        where inference_window.id = p_inference_window_id
+          and inference_window.owner_id = p_owner_id
+          and inference_window.status = 'processing'
         returning 1
     )
     select exists (select 1 from rejected);
