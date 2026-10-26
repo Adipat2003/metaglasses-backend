@@ -273,6 +273,7 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
         encoding="utf-8"
     )
     workflow = (ROOT / ".github" / "workflows" / "aws-deploy.yml").read_text(encoding="utf-8")
+    ci_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     assert '"us.anthropic.claude-haiku-5-5"' in validator_source
     assert "validateModelPlan" in validator_source
@@ -298,3 +299,14 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     assert "us.amazon.nova-lite-v1:0" in template
     assert "DATABASE_MIGRATOR_USER=metaglasses_migrator" in template
     assert "supabase/functions/migrate.ts" in workflow
+    assert "supabase/functions/api/task_plan_test.ts" in ci_workflow
+    assert "bash -n scripts/smoke-task-guidance-api.sh" in ci_workflow
+
+
+def test_task_guidance_smoke_test_requires_explicit_confirmation() -> None:
+    smoke_test = (ROOT / "scripts" / "smoke-task-guidance-api.sh").read_text(encoding="utf-8")
+
+    assert "TASK_GUIDANCE_TEST_CONFIRM:-" in smoke_test
+    assert "/v1/task-plans" in smoke_test
+    assert "/inference-windows" in smoke_test
+    assert "/stop" in smoke_test

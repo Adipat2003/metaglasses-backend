@@ -56,4 +56,6 @@ jobs:
           docker run --rm --volume "$PWD:/work" --workdir /work \
             denoland/deno:2.5.2 deno test --config supabase/functions/deno.json \
             supabase/functions/api/nvidia_test.ts \
-            supabase/functions/api/providers_test.ts
+            supabase/functions/api/providers_test.ts \
+            supabase/functions/api/task_plan_test.ts
+          bash -n scripts/smoke-task-guidance-api.sh

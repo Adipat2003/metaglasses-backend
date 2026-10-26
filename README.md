@@ -17,11 +17,23 @@ Append the existing route to the environment base URL:
 - `POST /v1/chat`
 - `POST /v1/images`
 - `DELETE /v1/images/{image_id}`
+- `POST /v1/task-plans`
+- `POST /v1/task-plans/{task_plan_id}/validate`
+- `POST /v1/task-plans/{task_plan_id}/approve`
+- `POST /v1/task-runs`
+- `POST /v1/task-runs/{task_run_id}/commands`
+- `POST /v1/task-runs/{task_run_id}/inference-windows`
+- `POST /v1/task-runs/{task_run_id}/stop`
 
 Phone routes require a Cognito user access token in `Authorization: Bearer <token>`. The
 lens display route uses the random pairing token as its capability credential. The Edge API
 returns permissive CORS headers. CORS does not replace authentication or pairing ownership
 enforcement.
+
+Task guidance uses Claude Haiku to validate a user-authored plan, then Nova Lite to observe
+one to three recent images. The user remains responsible for confirming, skipping, pausing, or
+stopping every task transition. See [task-plan validation](docs/task-plan-validation.md) for the
+state machine and [local development](docs/local-development.md) for the smoke test.
 
 ## Temporary images
 
