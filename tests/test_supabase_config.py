@@ -282,6 +282,8 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     assert "grant execute on function app.start_task_run" in migration
     assert "on conflict (owner_id, client_request_id) do update" in migration
     assert "create table app.task_run_commands" in command_migration
+    assert "drop constraint task_runs_status," in command_migration
+    assert "add constraint task_runs_status check" in command_migration
     assert "create or replace function app.apply_task_run_command" in command_migration
     assert "create table app.task_inference_windows" in inference_migration
     assert "create_task_inference_window" in inference_migration
