@@ -92,7 +92,7 @@ migration failure leaves the existing API running and prevents the new image fro
 The one-time bootstrap scripts in `database/bootstrap/` create that role and a separate
 `metaglasses_migrator` role. The migrator can create objects only in `app`, write the migration
 ledger, and has the narrow pairing-table privileges needed to own task-plan security-definer
-functions. It cannot access the public schema. Run bootstrap scripts in numeric order with the
+functions (select, update and references on `app.pairings`, and select on `app.pairing_images`). It cannot access the public schema. Run bootstrap scripts in numeric order with the
 database administrator before enabling automatic deployments. `database/migrations/0001_initial.sql`
 is the AWS-native schema used by the API; it does not depend on Supabase Auth, Storage, or
 extensions.

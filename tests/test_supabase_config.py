@@ -346,3 +346,17 @@ def test_later_migrations_do_not_select_a_bare_table_alias_into_a_record() -> No
         "claim_task_inference_window",
     ):
         assert f"create or replace function app.{function}(" in fix
+
+
+def test_migrator_can_read_pairing_images_for_task_inference_windows() -> None:
+    # create_task_inference_window is owned by the migrator and reads app.pairing_images, a table the
+    # administrator owns, so the bootstrap must grant it or the function fails at runtime.
+    bootstrap = (ROOT / "database" / "bootstrap" / "0004_grant_migrator_image_read.sql").read_text(
+        encoding="utf-8"
+    )
+    window_migration = (
+        ROOT / "database" / "migrations" / "0004_task_inference_windows.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "from app.pairing_images" in window_migration
+    assert "grant select on table app.pairing_images to metaglasses_migrator;" in bootstrap
