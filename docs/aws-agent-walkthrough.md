@@ -265,7 +265,7 @@ Explain the deliberate split between reasoning and visual observation:
 
 | Use | Fixed Bedrock model | Why |
 | --- | --- | --- |
-| Validate a user-authored task plan | `us.anthropic.claude-haiku-5-5` | Fast plan normalization, ambiguity detection, and review metadata |
+| Validate a user-authored task plan | `us.amazon.nova-pro-v1:0` (temporary; design target is `us.anthropic.claude-haiku-5-5`) | Plan normalization, ambiguity detection, and review metadata; Anthropic access is not yet enabled for the account |
 | Observe one to three recent task images | `us.amazon.nova-lite-v1:0` | Low-latency multimodal observation in the live loop |
 | Escalate uncertain or high-consequence verification | `us.amazon.nova-2-lite-v1:0` | Use selectively, not on every window |
 
