@@ -115,8 +115,10 @@ Resources:
                 Resource:
                   - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.anthropic.claude-haiku-5-5"
                   - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-lite-v1:0"
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.amazon.nova-pro-v1:0"
                   - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/anthropic.claude-haiku-5-5"
                   - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/amazon.nova-lite-v1:0"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/amazon.nova-pro-v1:0"
               - Effect: Allow
                 Action: rds-db:connect
                 Resource: !Sub "arn:${AWS::Partition}:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:${DatabaseResourceId}/metaglasses_api"

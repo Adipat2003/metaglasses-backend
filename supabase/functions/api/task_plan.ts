@@ -1,6 +1,6 @@
 import { signedBedrockRequest } from "./providers.ts";
 
-export const planValidatorModelId = "us.anthropic.claude-haiku-5-5";
+export const planValidatorModelId = "us.amazon.nova-pro-v1:0";
 const maxSteps = 30;
 const maxInstructionCharacters = 1_000;
 const maxTitleCharacters = 160;

@@ -22,6 +22,7 @@ import {
   signedBedrockRequest,
 } from "./providers.ts";
 import {
+  planValidatorModelId,
   TaskPlanValidationError,
   validateTaskPlanInput,
   validateTaskPlanWithClaude,
@@ -1523,7 +1524,7 @@ async function handleTaskPlanValidation(request: Request, taskPlanId: string): P
         "Task plan validation returned an unusable result. Retry shortly.",
         false,
         "plan_validation_invalid_response",
-        { model: "us.anthropic.claude-haiku-5-5", suggested_action: "Retry shortly." },
+        { model: planValidatorModelId, suggested_action: "Retry shortly." },
       );
     }
     throw new ApiError(
@@ -1532,7 +1533,7 @@ async function handleTaskPlanValidation(request: Request, taskPlanId: string): P
       false,
       "plan_validation_unavailable",
       {
-        model: "us.anthropic.claude-haiku-5-5",
+        model: planValidatorModelId,
         failure_type: error instanceof Error ? error.name : "UnknownError",
         suggested_action: "Retry shortly.",
       },
