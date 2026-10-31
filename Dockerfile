@@ -8,4 +8,4 @@ RUN deno cache --config supabase/functions/deno.json supabase/functions/api/inde
   supabase/functions/migrate.ts
 
 ENTRYPOINT ["deno"]
-CMD ["run", "--allow-env", "--allow-net", "supabase/functions/api/index.ts"]
+CMD ["run", "--allow-env", "--allow-net", "--allow-sys=osRelease", "supabase/functions/api/index.ts"]
