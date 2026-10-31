@@ -114,7 +114,7 @@ image_code=$(node -e 'process.stdout.write(Buffer.from("iVBORw0KGgoAAAANSUhEUgAA
 expect_status "$image_code" 201 "$smoke_dir/image.json"
 image_id=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).imageId)' \
   "$smoke_dir/image.json")
-captured_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+captured_at=$(node -e 'console.log(new Date().toISOString())')
 
 window_request_id=$(uuid)
 window_code=$(json_request POST "/v1/task-runs/$task_run_id/inference-windows" \
