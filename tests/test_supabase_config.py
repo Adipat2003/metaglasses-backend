@@ -311,3 +311,11 @@ def test_task_guidance_smoke_test_requires_explicit_confirmation() -> None:
     assert "/v1/task-plans" in smoke_test
     assert "/inference-windows" in smoke_test
     assert "/stop" in smoke_test
+
+
+def test_api_container_allows_the_sdk_to_read_the_os_release() -> None:
+    # The AWS SDK reads the OS release for its user-agent on every call. Without this
+    # permission Deno raises NotCapable and S3 calls fail as "Image storage unavailable".
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert '"--allow-sys=osRelease"' in dockerfile
