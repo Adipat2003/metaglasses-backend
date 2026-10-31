@@ -381,7 +381,6 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
         return await database`select * from app.remove_image(${tokenHash}, ${ownerId}, ${parameters
           .p_image_id as string})` as T;
       case "edge_api_create_task_plan": {
-        const sourceSteps = JSON.stringify(parameters.p_source_steps);
         return (await database`
           select app.create_task_plan(
             ${parameters.p_task_plan_id as string},
@@ -389,7 +388,7 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
             ${ownerId},
             ${parameters.p_client_request_id as string},
             ${parameters.p_title as string},
-            ${sourceSteps}::jsonb
+            ${database.json(parameters.p_source_steps as postgres.JSONValue)}
           ) as result
         `)[0].result as T;
       }
@@ -399,12 +398,11 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
         `)[0].result as T;
       }
       case "edge_api_save_task_plan_validation": {
-        const validationResult = JSON.stringify(parameters.p_validation_result);
         return (await database`
           select app.save_task_plan_validation(
             ${parameters.p_task_plan_id as string},
             ${ownerId},
-            ${validationResult}::jsonb
+            ${database.json(parameters.p_validation_result as postgres.JSONValue)}
           ) as result
         `)[0].result as T;
       }
@@ -441,7 +439,6 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
         `)[0].result as T;
       }
       case "edge_api_create_task_inference_window": {
-        const capturedAt = JSON.stringify(parameters.p_captured_at);
         return (await database`
           select app.create_task_inference_window(
             ${parameters.p_window_id as string},
@@ -451,21 +448,20 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
             ${parameters.p_sequence_number as number},
             ${parameters.p_observed_state_version as number},
             ${parameters.p_image_ids as string[]},
-            ${capturedAt}::jsonb
+            ${database.json(parameters.p_captured_at as postgres.JSONValue)}
           ) as result
         `)[0].result as T;
       }
       case "edge_api_claim_task_inference_window":
         return await database`select * from app.claim_task_inference_window()` as T;
       case "edge_api_complete_task_inference_window": {
-        const observation = JSON.stringify(parameters.p_observation);
         return (await database`
           select app.complete_task_inference_window(
             ${parameters.p_observation_id as string},
             ${parameters.p_inference_window_id as string},
             ${ownerId},
             ${parameters.p_model_id as string},
-            ${observation}::jsonb
+            ${database.json(parameters.p_observation as postgres.JSONValue)}
           ) as result
         `)[0].result as T;
       }
