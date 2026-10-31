@@ -1344,7 +1344,10 @@ async function observeTaskInferenceWindow(claim: TaskInferenceClaim): Promise<Ta
     ...request.init,
     signal: AbortSignal.timeout(8_000),
   });
-  if (!response.ok) throw new Error(`Nova returned HTTP ${response.status}.`);
+  if (!response.ok) {
+    const detail = redactedErrorText(await response.text().catch(() => "")).slice(0, 300);
+    throw new Error(`Nova returned HTTP ${response.status}. ${detail}`.trim());
+  }
   return validateTaskObservation(
     JSON.parse(taskObservationText(await response.json())),
     bytes.length,
@@ -1395,6 +1398,7 @@ async function processTaskInferenceWindow(): Promise<void> {
       inference_window_id: claim?.inference_window_id,
       model: taskObservationModelId,
       failure_type: error instanceof Error ? error.name : "UnknownError",
+      failure_message: error instanceof Error ? redactedErrorText(error.message).slice(0, 500) : "",
     }));
   } finally {
     inferenceWorkerRunning = false;

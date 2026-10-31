@@ -105,7 +105,8 @@ task_run_id=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process
 state_version=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).stateVersion)' \
   "$smoke_dir/run.json")
 
-image_code=$(node -e 'process.stdout.write(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9JZ2YAAAAASUVORK5CYII=", "base64"))' \
+# Nova rejects a 1x1 image, so send a small 64x64 checkerboard.
+image_code=$(node -e 'process.stdout.write(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAYklEQVR42u3ZwQkAMAgDQAdz/3m6QTtDhEKhJ76D9wzW7o52hXM7vwAAAAAAAAAAAAAAxoDXDkrzAQAAAAAAAAAAAADmAI0MAAAAAAAAAAAAwH9AIwMAAAAAAAAAAAD4DnAAqlM5/w+L0OcAAAAASUVORK5CYII=", "base64"))' \
   | curl --silent --show-error --output "$smoke_dir/image.json" --write-out '%{http_code}' \
     --request POST "$EDGE_API_BASE/v1/images?pairingToken=$PAIRING_TOKEN" \
     --header "Authorization: Bearer $EDGE_API_ACCESS_TOKEN" \
