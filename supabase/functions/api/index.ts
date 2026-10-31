@@ -22,6 +22,7 @@ import {
   signedBedrockRequest,
 } from "./providers.ts";
 import {
+  parseModelJson,
   planValidatorModelId,
   TaskPlanValidationError,
   validateTaskPlanInput,
@@ -1349,7 +1350,7 @@ async function observeTaskInferenceWindow(claim: TaskInferenceClaim): Promise<Ta
     throw new Error(`Nova returned HTTP ${response.status}. ${detail}`.trim());
   }
   return validateTaskObservation(
-    JSON.parse(taskObservationText(await response.json())),
+    parseModelJson(taskObservationText(await response.json())),
     bytes.length,
   );
 }
