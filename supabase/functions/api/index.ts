@@ -1313,7 +1313,7 @@ async function observeTaskInferenceWindow(claim: TaskInferenceClaim): Promise<Ta
     JSON.stringify({
       system: [{
         text:
-          "You observe frames for one existing task step. Return JSON only. Do not give instructions, add steps, or claim completion. proposedTransition must be remain_in_progress, candidate_complete, or blocked.",
+          "You observe frames for one existing task step. Return one flat JSON object and nothing else, with exactly these keys: summary (string, at most 300 characters), proposedTransition (remain_in_progress, candidate_complete, or blocked), confidence (number from 0 to 1), evidenceFrameIndexes (array with at least one zero-based frame index, even when the step is not visible). Do not repeat the input, give instructions, add steps, or claim completion.",
       }],
       messages: [{
         role: "user",
@@ -1322,12 +1322,6 @@ async function observeTaskInferenceWindow(claim: TaskInferenceClaim): Promise<Ta
             text: JSON.stringify({
               instruction,
               visualAcceptanceCriteria: criteria,
-              requiredResponse: {
-                summary: "string",
-                proposedTransition: "remain_in_progress | candidate_complete | blocked",
-                confidence: "number from 0 to 1",
-                evidenceFrameIndexes: ["zero-based frame index"],
-              },
             }),
           },
           ...orderedImages.map((image, index) => ({
