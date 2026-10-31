@@ -495,7 +495,7 @@ async function authenticate(request: Request): Promise<AuthenticatedUser> {
   if (!match) throw new ApiError(401, "Missing or invalid access token.", true);
   try {
     const payload = await verifier.verify(match[1].trim());
-    if (typeof payload.sub !== "string" || !uuidPattern.test(payload.sub)) {
+    if (typeof payload.sub !== "string" || !cognitoSubjectPattern.test(payload.sub)) {
       throw new Error("invalid subject");
     }
     return { id: payload.sub };
@@ -508,6 +508,8 @@ async function authenticate(request: Request): Promise<AuthenticatedUser> {
 
 const tokenPattern = /^[0-9a-fA-F]{32}$/;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// Cognito subjects are 8-4-4-4-12 hex but do not always carry RFC 4122 version and variant bits.
+const cognitoSubjectPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const jwtVerificationErrorTypes = new Set([
   "FetchError",
   "JwksNotAvailableInCacheError",
