@@ -1,3 +1,4 @@
+import re
 import tomllib
 from pathlib import Path
 
@@ -319,3 +320,29 @@ def test_api_container_allows_the_sdk_to_read_the_os_release() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     assert '"--allow-sys=osRelease"' in dockerfile
+
+
+def test_later_migrations_do_not_select_a_bare_table_alias_into_a_record() -> None:
+    # `select run into run_record from app.task_runs as run` selects the whole row as one composite
+    # value, so PL/pgSQL assigns it to the record's first field and fails with an invalid uuid.
+    # Migrations 0003 to 0005 contain that mistake and were already applied, so 0007 redefines them.
+    bare_alias = re.compile(
+        r"select\s+([a-z_]+)\s+into\s+[a-z_]+\s+from\s+[a-z_.]+\s+as\s+([a-z_]+)", re.IGNORECASE
+    )
+    migrations = sorted((ROOT / "database" / "migrations").glob("*.sql"))
+    fix = (ROOT / "database" / "migrations" / "0007_fix_task_row_selects.sql").read_text(
+        encoding="utf-8"
+    )
+
+    for path in migrations:
+        if int(path.name[:4]) < 7:
+            continue
+        for match in bare_alias.finditer(path.read_text(encoding="utf-8")):
+            alias = match.group(1)
+            assert alias != match.group(2), f"{path.name} selects bare alias {alias}"
+    for function in (
+        "apply_task_run_command",
+        "create_task_inference_window",
+        "claim_task_inference_window",
+    ):
+        assert f"create or replace function app.{function}(" in fix
