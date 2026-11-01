@@ -25,9 +25,9 @@ import {
 import {
   parseModelJson,
   planValidatorModelId,
-  TaskPlanValidationError,
   refineTaskPlanWithModel,
   reviewTaskPlanForApprovalWithModel,
+  TaskPlanValidationError,
   validateTaskPlanFeedback,
   validateTaskPlanInput,
   validateTaskPlanRevisionHistory,
@@ -1615,7 +1615,12 @@ async function handleTaskPlanRefinement(request: Request, taskPlanId: string): P
   try {
     history = validateTaskPlanRevisionHistory(plan.revisionHistory);
   } catch {
-    throw new ApiError(500, "Task plan revision history is invalid.", false, "task_plan_storage_invalid");
+    throw new ApiError(
+      500,
+      "Task plan revision history is invalid.",
+      false,
+      "task_plan_storage_invalid",
+    );
   }
   const duplicate = history.find((turn) => turn.clientRequestId === clientRequestId);
   if (duplicate) {
@@ -1630,7 +1635,12 @@ async function handleTaskPlanRefinement(request: Request, taskPlanId: string): P
     return jsonResponse(plan);
   }
   if (plan.currentVersion !== expectedVersion) {
-    throw new ApiError(409, "Task plan changed. Read it again and retry.", false, "task_plan_stale");
+    throw new ApiError(
+      409,
+      "Task plan changed. Read it again and retry.",
+      false,
+      "task_plan_stale",
+    );
   }
   if (plan.status !== "draft" && plan.status !== "awaiting_approval") {
     throw new ApiError(
@@ -1643,7 +1653,9 @@ async function handleTaskPlanRefinement(request: Request, taskPlanId: string): P
 
   let input;
   try {
-    if (!Array.isArray(plan.sourceSteps)) throw new TaskPlanValidationError("Invalid source steps.");
+    if (!Array.isArray(plan.sourceSteps)) {
+      throw new TaskPlanValidationError("Invalid source steps.");
+    }
     input = validateTaskPlanInput({ title: plan.title, steps: plan.sourceSteps });
   } catch {
     throw new ApiError(500, "Task plan storage is invalid.", false, "task_plan_storage_invalid");
@@ -1696,16 +1708,36 @@ async function handleTaskPlanRefinement(request: Request, taskPlanId: string): P
     throw new ApiError(404, "Task plan not found.", false, "task_plan_not_found");
   }
   if (result === "stale") {
-    throw new ApiError(409, "Task plan changed. Read it again and retry.", false, "task_plan_stale");
+    throw new ApiError(
+      409,
+      "Task plan changed. Read it again and retry.",
+      false,
+      "task_plan_stale",
+    );
   }
   if (result === "not_refinable") {
-    throw new ApiError(409, "This task plan can no longer be refined.", false, "task_plan_not_refinable");
+    throw new ApiError(
+      409,
+      "This task plan can no longer be refined.",
+      false,
+      "task_plan_not_refinable",
+    );
   }
   if (result === "has_runs") {
-    throw new ApiError(409, "A task run already exists for this plan.", false, "task_plan_has_runs");
+    throw new ApiError(
+      409,
+      "A task run already exists for this plan.",
+      false,
+      "task_plan_has_runs",
+    );
   }
   if (result === "revision_limit") {
-    throw new ApiError(409, "This plan reached its refinement limit.", false, "task_plan_revision_limit");
+    throw new ApiError(
+      409,
+      "This plan reached its refinement limit.",
+      false,
+      "task_plan_revision_limit",
+    );
   }
   if (result === "idempotency_conflict") {
     throw new ApiError(
@@ -1726,7 +1758,12 @@ async function handleTaskPlanApprove(request: Request, taskPlanId: string): Prom
   const plan = await getTaskPlan(taskPlanId, user.id);
   if (plan.status === "approved") return jsonResponse(plan);
   if (plan.status !== "draft" && plan.status !== "awaiting_approval") {
-    throw new ApiError(409, "This task plan cannot be approved.", false, "task_plan_not_approvable");
+    throw new ApiError(
+      409,
+      "This task plan cannot be approved.",
+      false,
+      "task_plan_not_approvable",
+    );
   }
   if (!Array.isArray(plan.sourceSteps) || typeof plan.currentVersion !== "number") {
     throw new ApiError(500, "Task plan storage is invalid.", false, "task_plan_storage_invalid");
@@ -1785,10 +1822,20 @@ async function handleTaskPlanApprove(request: Request, taskPlanId: string): Prom
     );
   }
   if (approved === "stale") {
-    throw new ApiError(409, "Task plan changed during approval review. Retry.", false, "task_plan_stale");
+    throw new ApiError(
+      409,
+      "Task plan changed during approval review. Retry.",
+      false,
+      "task_plan_stale",
+    );
   }
   if (approved === "has_runs") {
-    throw new ApiError(409, "A task run already exists for this plan.", false, "task_plan_has_runs");
+    throw new ApiError(
+      409,
+      "A task run already exists for this plan.",
+      false,
+      "task_plan_has_runs",
+    );
   }
   if (approved === "not_found") {
     throw new ApiError(404, "Task plan not found.", false, "task_plan_not_found");
@@ -1802,7 +1849,12 @@ async function handleTaskPlanApprove(request: Request, taskPlanId: string): Prom
     );
   }
   if (approved !== "approved") {
-    throw new ApiError(500, "Plan approval could not be saved.", false, "task_plan_approval_failed");
+    throw new ApiError(
+      500,
+      "Plan approval could not be saved.",
+      false,
+      "task_plan_approval_failed",
+    );
   }
   return jsonResponse(await getTaskPlan(taskPlanId, user.id));
 }

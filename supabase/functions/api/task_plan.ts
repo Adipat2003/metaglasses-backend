@@ -145,7 +145,11 @@ export function validateTaskPlanRevisionHistory(value: unknown): TaskPlanRevisio
         `revisionHistory[${index}].clientRequestId`,
         36,
       ),
-      request: normalizedText(turn.request, `revisionHistory[${index}].request`, maxRevisionCharacters),
+      request: normalizedText(
+        turn.request,
+        `revisionHistory[${index}].request`,
+        maxRevisionCharacters,
+      ),
       summary: normalizedText(turn.summary, `revisionHistory[${index}].summary`, 500),
     };
   });

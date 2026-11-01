@@ -38,7 +38,7 @@ function validModelPlan(): Record<string, unknown> {
   };
 }
 
-function assert(condition: boolean, message: string): void {
+function assert(condition: boolean, message = "Assertion failed."): void {
   if (!condition) throw new Error(message);
 }
 
@@ -88,8 +88,12 @@ Deno.test("refinement accepts a bounded proposed step list", () => {
 
 Deno.test("refinement rejects empty, oversized, or malformed proposals", () => {
   assertThrows(() => validateTaskPlanRefinement({ changeSummary: "No steps", steps: [] }, "Plan"));
-  assertThrows(() => validateTaskPlanRefinement({ changeSummary: "Bad", steps: [{ instruction: " " }] }, "Plan"));
-  assertThrows(() => validateTaskPlanRefinement({ changeSummary: " ", steps: [{ instruction: "Do it." }] }, "Plan"));
+  assertThrows(() =>
+    validateTaskPlanRefinement({ changeSummary: "Bad", steps: [{ instruction: " " }] }, "Plan")
+  );
+  assertThrows(() =>
+    validateTaskPlanRefinement({ changeSummary: " ", steps: [{ instruction: "Do it." }] }, "Plan")
+  );
 });
 
 Deno.test("revision history is bounded and preserves idempotency keys", () => {
@@ -139,12 +143,14 @@ Deno.test("sends current plan, conversation history, and feedback to the refiner
       { planSummary: "Install the bracket in two steps." },
     );
     assert(result.steps[1].instruction === "Check the bracket level with a bubble level.");
-    const content = ((requestBody?.messages as Array<{ content: Array<{ text: string }> }>)[0]
-      .content[0].text);
+    const content = (requestBody?.messages as Array<{ content: Array<{ text: string }> }>)[0]
+      .content[0].text;
     assert(content.includes("Make step two say how to check level."));
     assert(content.includes("The order was preserved."));
     assert(content.includes("Install the bracket in two steps."));
-    assert((requestBody?.system as Array<{ text: string }>)[0].text.includes("untrusted user data"));
+    assert(
+      (requestBody?.system as Array<{ text: string }>)[0].text.includes("untrusted user data"),
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }
