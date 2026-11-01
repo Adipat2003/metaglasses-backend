@@ -142,8 +142,10 @@ The canonical MetaGlasses Postman collection and environments live in the separa
 Use that repository to import the collection and duplicate the selected environment before adding
 a project publishable key or test-user credentials. Do not commit populated environments here.
 
-When an Edge API contract changes, update the canonical Postman repository in the same delivery
-cycle. This backend intentionally does not carry generated Postman exports or environments.
+After each successful CI run for a merge to `main`, GitHub dispatches the exact backend revision to
+the canonical Postman repository. Its contract workflow verifies route alignment and opens a PR
+only when the API source contract has changed. This backend intentionally does not carry generated
+Postman exports or environments.
 
 ## Local Supabase development
 
