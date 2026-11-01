@@ -23,7 +23,7 @@ ACM certificate.
 
 | Stack | Purpose |
 | --- | --- |
-| `metaglasses-auth` | Cognito user pool and mobile app client |
+| `metaglasses-auth` | Cognito user pool, legacy SRP client, and OAuth PKCE clients |
 | `metaglasses-storage` | Private pairing-image S3 bucket |
 | `metaglasses-database` | VPC, private RDS PostgreSQL, and database security group |
 | `metaglasses-compute` | EC2, ECR, SSM, runtime IAM role, and GitHub OIDC deploy role |

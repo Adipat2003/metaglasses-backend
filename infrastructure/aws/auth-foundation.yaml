@@ -1,13 +1,14 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "MetaGlasses authentication foundation: Cognito email sign-in for the mobile client."
+Description: "MetaGlasses authentication foundation: preserves SRP while adding public OAuth PKCE clients."
 
 Metadata:
   AWSToolsMetrics:
     AWSAgentToolkit: aws-cloudformation@3
   com.aws.cloudformation.Context:
-    arch: one Cognito user pool and one public mobile app client
+    arch: one Cognito user pool, legacy SRP client, and separate OAuth clients
     must:
       - Mobile clients must never receive an app client secret.
+      - OAuth clients must use the code grant with exact registered redirect URIs.
       - Supabase users stay unchanged until a migration strategy is approved.
 
 Resources:
@@ -81,6 +82,106 @@ Resources:
         RefreshToken: days
       UserPoolId: !Ref UserPool
 
+  OAuthUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Enables the Cognito hosted UI OAuth endpoints without buying a custom domain.
+        must:
+          - Keep the account-scoped prefix to avoid cross-account naming conflicts.
+          - Do not change the domain without updating every registered OAuth endpoint.
+        mutable: review-required
+        mutability:
+          Domain: must-never-change
+    Properties:
+      Domain: !Sub "metaglasses-${AWS::AccountId}"
+      ManagedLoginVersion: 1
+      UserPoolId: !Ref UserPool
+
+  OAuthMobileAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Gives Glanss browser sign-in with PKCE while preserving the shipped SRP client.
+        must:
+          - GenerateSecret must remain false for this public native client.
+          - Allow only code grant and the exact glanss mobile callback.
+          - ALLOW_REFRESH_TOKEN_AUTH must stay absent while refresh rotation is enabled.
+        mutable: change-with-constraints
+        mutability:
+          CallbackURLs: review-required
+          LogoutURLs: review-required
+          GenerateSecret: must-never-change
+          RefreshTokenRotation: review-required
+    Properties:
+      AccessTokenValidity: 15
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      CallbackURLs:
+        - "glanss://auth/callback"
+      EnableTokenRevocation: true
+      GenerateSecret: false
+      LogoutURLs:
+        - "glanss://auth/callback"
+      PreventUserExistenceErrors: ENABLED
+      RefreshTokenRotation:
+        Feature: ENABLED
+        RetryGracePeriodSeconds: 30
+      RefreshTokenValidity: 30
+      SupportedIdentityProviders:
+        - COGNITO
+      TokenValidityUnits:
+        AccessToken: minutes
+        RefreshToken: days
+      UserPoolId: !Ref UserPool
+
+  PostmanOAuthAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Isolates Postman's browser PKCE testing callback from the mobile app client.
+        must:
+          - GenerateSecret must remain false for this public test client.
+          - Allow only code grant and Postman's exact browser callback.
+          - ALLOW_REFRESH_TOKEN_AUTH must stay absent while refresh rotation is enabled.
+        mutable: change-with-constraints
+        mutability:
+          CallbackURLs: review-required
+          LogoutURLs: review-required
+          GenerateSecret: must-never-change
+          RefreshTokenRotation: review-required
+    Properties:
+      AccessTokenValidity: 15
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      CallbackURLs:
+        - "https://oauth.pstmn.io/v1/browser-callback"
+      EnableTokenRevocation: true
+      GenerateSecret: false
+      LogoutURLs:
+        - "https://oauth.pstmn.io/v1/browser-callback"
+      PreventUserExistenceErrors: ENABLED
+      RefreshTokenRotation:
+        Feature: ENABLED
+        RetryGracePeriodSeconds: 30
+      RefreshTokenValidity: 30
+      SupportedIdentityProviders:
+        - COGNITO
+      TokenValidityUnits:
+        AccessToken: minutes
+        RefreshToken: days
+      UserPoolId: !Ref UserPool
+
 Outputs:
   UserPoolId:
     Description: Cognito user pool ID for the API and mobile application.
@@ -88,6 +189,15 @@ Outputs:
   MobileAppClientId:
     Description: Public Cognito app client ID for the mobile application.
     Value: !Ref MobileAppClient
+  OAuthMobileAppClientId:
+    Description: Public OAuth PKCE app client ID for Glanss.
+    Value: !Ref OAuthMobileAppClient
+  PostmanOAuthAppClientId:
+    Description: Public OAuth PKCE app client ID for Postman testing.
+    Value: !Ref PostmanOAuthAppClient
+  CognitoHostedUiBaseUrl:
+    Description: Cognito hosted UI base URL for OAuth authorize and token endpoints.
+    Value: !Sub "https://metaglasses-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com"
   JwtIssuer:
     Description: JWT issuer that the API will validate.
     Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"

@@ -159,6 +159,27 @@ def test_compute_bootstrap_writes_non_secret_runtime_configuration() -> None:
     assert not (ROOT / ".github" / "workflows" / "cd.yml").exists()
 
 
+def test_auth_foundation_keeps_srp_and_isolates_oauth_pkce_clients() -> None:
+    template = (ROOT / "infrastructure" / "aws" / "auth-foundation.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ALLOW_USER_SRP_AUTH" in template
+    assert "OAuthUserPoolDomain:" in template
+    assert "ManagedLoginVersion: 1" in template
+    assert "OAuthMobileAppClient:" in template
+    assert "PostmanOAuthAppClient:" in template
+    assert "AllowedOAuthFlowsUserPoolClient: true" in template
+    assert '"glanss://auth/callback"' in template
+    assert '"https://oauth.pstmn.io/v1/browser-callback"' in template
+    assert "- code" in template
+    assert "- implicit" not in template
+    assert "GenerateSecret: true" not in template
+    assert "OAuthMobileAppClientId:" in template
+    assert "PostmanOAuthAppClientId:" in template
+    assert "CognitoHostedUiBaseUrl:" in template
+
+
 def test_github_deploy_role_can_push_ecr_images() -> None:
     template = (ROOT / "infrastructure" / "aws" / "compute-foundation.yaml").read_text(
         encoding="utf-8"
