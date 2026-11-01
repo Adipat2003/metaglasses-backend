@@ -165,11 +165,11 @@ Resources:
         - email
         - profile
       CallbackURLs:
-        - "https://oauth.pstmn.io/v1/browser-callback"
+        - "https://oauth.pstmn.io/v1/callback"
       EnableTokenRevocation: true
       GenerateSecret: false
       LogoutURLs:
-        - "https://oauth.pstmn.io/v1/browser-callback"
+        - "https://oauth.pstmn.io/v1/callback"
       PreventUserExistenceErrors: ENABLED
       RefreshTokenRotation:
         Feature: ENABLED
