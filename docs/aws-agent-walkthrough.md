@@ -141,7 +141,10 @@ aws cloudformation describe-stacks \
 Explain:
 
 - `UserPoolId`: Cognito directory for MetaGlasses users.
-- `MobileAppClientId`: client identifier for the mobile application. It is not a user secret.
+- `MobileAppClientId`: legacy SRP client identifier for the mobile application. It is not a user secret.
+- `OAuthMobileAppClientId`: OAuth PKCE client identifier for the Glanss mobile callback.
+- `PostmanOAuthAppClientId`: OAuth PKCE client identifier for Postman browser testing.
+- `CognitoHostedUiBaseUrl`: base URL for the hosted UI OAuth endpoints.
 - `JwtIssuer`: issuer the API accepts when validating access tokens.
 
 Do not list users, reset passwords, create users, change MFA, or modify app clients unless the
