@@ -274,7 +274,7 @@ Explain the deliberate split between reasoning and visual observation:
 
 | Use | Fixed Bedrock model | Why |
 | --- | --- | --- |
-| Validate a user-authored task plan | `us.amazon.nova-pro-v1:0` (temporary; design target is `us.anthropic.claude-haiku-5-5`) | Plan normalization, ambiguity detection, and review metadata; Anthropic access is not yet enabled for the account |
+| Validate a user-authored task plan | `zai.glm-4.7-flash` | Text-only plan normalization, ambiguity detection, and review metadata |
 | Observe one to three recent task images | `us.amazon.nova-lite-v1:0` | Low-latency multimodal observation in the live loop |
 | Escalate uncertain or high-consequence verification | `us.amazon.nova-2-lite-v1:0` | Use selectively, not on every window |
 
@@ -287,7 +287,7 @@ Read-only inventory commands:
 aws bedrock list-foundation-models \
   --profile PowerUserAccess-995342110760 \
   --region us-east-1 \
-  --query 'modelSummaries[?contains(modelId, `nova`) || contains(modelId, `claude`)].[modelId,modelName,inputModalities,outputModalities]' \
+  --query 'modelSummaries[?contains(modelId, `nova`) || contains(modelId, `zai`)].[modelId,modelName,inputModalities,outputModalities]' \
   --output table
 
 aws bedrock list-inference-profiles \
@@ -319,7 +319,7 @@ Explain the normal task-guidance sequence:
 
 ```text
 Authenticated user submits ordered steps
-  -> Claude validates the plan
+  -> GLM 4.7 Flash validates the plan
   -> user reviews and explicitly approves it
   -> user starts a task run
   -> client uploads 1-3 recent images
@@ -342,7 +342,7 @@ POST /v1/task-runs/{taskRunId}/stop
 
 For a live end-to-end test, use a dedicated Cognito test user and a new pairing token. The guarded
 script [smoke-task-guidance-api.sh](../scripts/smoke-task-guidance-api.sh) changes pairing display
-state, creates a task record, calls Claude and Nova, and may incur model charges. It requires the
+state, creates a task record, calls GLM and Nova, and may incur model charges. It requires the
 human's explicit approval immediately before running it. Follow the command in
 [local-development.md](local-development.md#validation).
 

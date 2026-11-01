@@ -7,7 +7,7 @@ export function parseModelJson(text: string): unknown {
   return JSON.parse(start >= 0 && end > start ? text.slice(start, end + 1) : text);
 }
 
-export const planValidatorModelId = "us.amazon.nova-pro-v1:0";
+export const planValidatorModelId = "zai.glm-4.7-flash";
 const maxSteps = 30;
 const maxInstructionCharacters = 1_000;
 const maxTitleCharacters = 160;
@@ -228,7 +228,7 @@ function modelText(response: unknown): string {
   return text.trim();
 }
 
-export async function validateTaskPlanWithClaude(
+export async function validateTaskPlanWithModel(
   region: string,
   credentials: BedrockCredentials,
   plan: TaskPlanInput,

@@ -1,4 +1,9 @@
-import { parseModelJson, validateModelPlan, validateTaskPlanInput } from "./task_plan.ts";
+import {
+  parseModelJson,
+  planValidatorModelId,
+  validateModelPlan,
+  validateTaskPlanInput,
+} from "./task_plan.ts";
 
 const sourcePlan = validateTaskPlanInput({
   title: "Install bracket",
@@ -43,6 +48,13 @@ Deno.test("task plan input normalizes source instructions", () => {
   assert(
     sourcePlan.steps[0].instruction === "Hold the bracket against the marked wall position.",
     "Expected normalized source instruction.",
+  );
+});
+
+Deno.test("task plan validator uses GLM 4.7 Flash", () => {
+  assert(
+    planValidatorModelId === "zai.glm-4.7-flash",
+    "Expected the Bedrock GLM 4.7 Flash model ID.",
   );
 });
 

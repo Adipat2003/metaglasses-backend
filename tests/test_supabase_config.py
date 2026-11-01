@@ -299,7 +299,7 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     workflow = (ROOT / ".github" / "workflows" / "aws-deploy.yml").read_text(encoding="utf-8")
     ci_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
-    assert '"us.amazon.nova-pro-v1:0"' in validator_source
+    assert '"zai.glm-4.7-flash"' in validator_source
     assert "validateModelPlan" in validator_source
     assert "POST\" && path === \"/v1/task-plans\"" in api_source
     assert "POST\" && path === \"/v1/task-runs\"" in api_source
@@ -321,7 +321,7 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     assert "publish_task_run_start" in start_migration
     assert "bedrock:InvokeModel" in template
     assert "us.amazon.nova-lite-v1:0" in template
-    assert "us.amazon.nova-pro-v1:0" in template
+    assert "foundation-model/zai.glm-4.7-flash" in template
     assert "DATABASE_MIGRATOR_USER=metaglasses_migrator" in template
     assert "supabase/functions/migrate.ts" in workflow
     assert "supabase/functions/api/task_plan_test.ts" in ci_workflow
