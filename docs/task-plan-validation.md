@@ -14,6 +14,12 @@ profile:
 us.anthropic.claude-haiku-5-5
 ```
 
+> **Temporary deviation:** The AWS account cannot yet invoke Anthropic models on Bedrock
+> (`AccessDeniedException: ... not available for this account`). Until that is resolved, the
+> deployed validator uses `us.amazon.nova-pro-v1:0`, set by `planValidatorModelId` in
+> `supabase/functions/api/task_plan.ts`. It returned unfenced JSON in the required shape in a
+> two-plan check; Nova Lite did not. Revert the constant when Claude access is available.
+
 Claude Haiku validates and normalizes the user's text plan. It does not approve the plan by
 itself. Deterministic backend validation and explicit user approval are required before a plan
 can start a camera-guidance run.

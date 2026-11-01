@@ -22,6 +22,8 @@ import {
   signedBedrockRequest,
 } from "./providers.ts";
 import {
+  parseModelJson,
+  planValidatorModelId,
   TaskPlanValidationError,
   validateTaskPlanInput,
   validateTaskPlanWithClaude,
@@ -381,7 +383,6 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
         return await database`select * from app.remove_image(${tokenHash}, ${ownerId}, ${parameters
           .p_image_id as string})` as T;
       case "edge_api_create_task_plan": {
-        const sourceSteps = JSON.stringify(parameters.p_source_steps);
         return (await database`
           select app.create_task_plan(
             ${parameters.p_task_plan_id as string},
@@ -389,7 +390,7 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
             ${ownerId},
             ${parameters.p_client_request_id as string},
             ${parameters.p_title as string},
-            ${sourceSteps}::jsonb
+            ${database.json(parameters.p_source_steps as postgres.JSONValue)}
           ) as result
         `)[0].result as T;
       }
@@ -399,12 +400,11 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
         `)[0].result as T;
       }
       case "edge_api_save_task_plan_validation": {
-        const validationResult = JSON.stringify(parameters.p_validation_result);
         return (await database`
           select app.save_task_plan_validation(
             ${parameters.p_task_plan_id as string},
             ${ownerId},
-            ${validationResult}::jsonb
+            ${database.json(parameters.p_validation_result as postgres.JSONValue)}
           ) as result
         `)[0].result as T;
       }
@@ -441,7 +441,6 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
         `)[0].result as T;
       }
       case "edge_api_create_task_inference_window": {
-        const capturedAt = JSON.stringify(parameters.p_captured_at);
         return (await database`
           select app.create_task_inference_window(
             ${parameters.p_window_id as string},
@@ -451,21 +450,20 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
             ${parameters.p_sequence_number as number},
             ${parameters.p_observed_state_version as number},
             ${parameters.p_image_ids as string[]},
-            ${capturedAt}::jsonb
+            ${database.json(parameters.p_captured_at as postgres.JSONValue)}
           ) as result
         `)[0].result as T;
       }
       case "edge_api_claim_task_inference_window":
         return await database`select * from app.claim_task_inference_window()` as T;
       case "edge_api_complete_task_inference_window": {
-        const observation = JSON.stringify(parameters.p_observation);
         return (await database`
           select app.complete_task_inference_window(
             ${parameters.p_observation_id as string},
             ${parameters.p_inference_window_id as string},
             ${ownerId},
             ${parameters.p_model_id as string},
-            ${observation}::jsonb
+            ${database.json(parameters.p_observation as postgres.JSONValue)}
           ) as result
         `)[0].result as T;
       }
@@ -495,7 +493,7 @@ async function authenticate(request: Request): Promise<AuthenticatedUser> {
   if (!match) throw new ApiError(401, "Missing or invalid access token.", true);
   try {
     const payload = await verifier.verify(match[1].trim());
-    if (typeof payload.sub !== "string" || !uuidPattern.test(payload.sub)) {
+    if (typeof payload.sub !== "string" || !cognitoSubjectPattern.test(payload.sub)) {
       throw new Error("invalid subject");
     }
     return { id: payload.sub };
@@ -508,6 +506,8 @@ async function authenticate(request: Request): Promise<AuthenticatedUser> {
 
 const tokenPattern = /^[0-9a-fA-F]{32}$/;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// Cognito subjects are 8-4-4-4-12 hex but do not always carry RFC 4122 version and variant bits.
+const cognitoSubjectPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const jwtVerificationErrorTypes = new Set([
   "FetchError",
   "JwksNotAvailableInCacheError",
@@ -1345,9 +1345,12 @@ async function observeTaskInferenceWindow(claim: TaskInferenceClaim): Promise<Ta
     ...request.init,
     signal: AbortSignal.timeout(8_000),
   });
-  if (!response.ok) throw new Error(`Nova returned HTTP ${response.status}.`);
+  if (!response.ok) {
+    const detail = redactedErrorText(await response.text().catch(() => "")).slice(0, 300);
+    throw new Error(`Nova returned HTTP ${response.status}. ${detail}`.trim());
+  }
   return validateTaskObservation(
-    JSON.parse(taskObservationText(await response.json())),
+    parseModelJson(taskObservationText(await response.json())),
     bytes.length,
   );
 }
@@ -1396,6 +1399,7 @@ async function processTaskInferenceWindow(): Promise<void> {
       inference_window_id: claim?.inference_window_id,
       model: taskObservationModelId,
       failure_type: error instanceof Error ? error.name : "UnknownError",
+      failure_message: error instanceof Error ? redactedErrorText(error.message).slice(0, 500) : "",
     }));
   } finally {
     inferenceWorkerRunning = false;
@@ -1525,7 +1529,7 @@ async function handleTaskPlanValidation(request: Request, taskPlanId: string): P
         "Task plan validation returned an unusable result. Retry shortly.",
         false,
         "plan_validation_invalid_response",
-        { model: "us.anthropic.claude-haiku-5-5", suggested_action: "Retry shortly." },
+        { model: planValidatorModelId, suggested_action: "Retry shortly." },
       );
     }
     throw new ApiError(
@@ -1534,7 +1538,7 @@ async function handleTaskPlanValidation(request: Request, taskPlanId: string): P
       false,
       "plan_validation_unavailable",
       {
-        model: "us.anthropic.claude-haiku-5-5",
+        model: planValidatorModelId,
         failure_type: error instanceof Error ? error.name : "UnknownError",
         suggested_action: "Retry shortly.",
       },

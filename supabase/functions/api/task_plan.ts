@@ -1,6 +1,13 @@
 import { signedBedrockRequest } from "./providers.ts";
 
-export const planValidatorModelId = "us.anthropic.claude-haiku-5-5";
+// Models often wrap JSON in a markdown fence or a sentence; take the outermost object.
+export function parseModelJson(text: string): unknown {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  return JSON.parse(start >= 0 && end > start ? text.slice(start, end + 1) : text);
+}
+
+export const planValidatorModelId = "us.amazon.nova-pro-v1:0";
 const maxSteps = 30;
 const maxInstructionCharacters = 1_000;
 const maxTitleCharacters = 160;
@@ -254,7 +261,7 @@ export async function validateTaskPlanWithClaude(
       signal: AbortSignal.timeout(planValidationTimeoutMilliseconds),
     });
     if (!response.ok) throw new Error(`Bedrock returned HTTP ${response.status}.`);
-    return validateModelPlan(JSON.parse(modelText(await response.json())), plan.steps);
+    return validateModelPlan(parseModelJson(modelText(await response.json())), plan.steps);
   } catch (error) {
     if (error instanceof TaskPlanValidationError || error instanceof SyntaxError) {
       throw new TaskPlanValidationError("The validator returned an invalid plan review.");

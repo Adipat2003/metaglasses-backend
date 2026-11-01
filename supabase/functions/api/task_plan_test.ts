@@ -1,4 +1,4 @@
-import { validateModelPlan, validateTaskPlanInput } from "./task_plan.ts";
+import { parseModelJson, validateModelPlan, validateTaskPlanInput } from "./task_plan.ts";
 
 const sourcePlan = validateTaskPlanInput({
   title: "Install bracket",
@@ -73,4 +73,17 @@ Deno.test("model plan requires clarification questions when clarification is nee
   const modelPlan = validModelPlan();
   modelPlan.needsUserClarification = true;
   assertThrows(() => validateModelPlan(modelPlan, sourcePlan.steps));
+});
+
+Deno.test("parses model JSON wrapped in a markdown fence or prose", () => {
+  const expected = '{"summary":"ok","confidence":0.5}';
+  for (
+    const text of [
+      expected,
+      "```json\n" + expected + "\n```",
+      "Here you go:\n" + expected + "\nDone.",
+    ]
+  ) {
+    assert(JSON.stringify(parseModelJson(text)) === expected, `should parse: ${text}`);
+  }
 });

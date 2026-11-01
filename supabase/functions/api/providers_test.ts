@@ -230,3 +230,33 @@ Deno.test("signs AWS Bedrock requests without putting the secret in headers", as
   assert(headers.get("x-amz-security-token") === "session-token", "session token should pass");
   assert(!JSON.stringify(request).includes("never-send-this-secret"), "secret must not be sent");
 });
+
+Deno.test("signs a Bedrock model ID containing a colon like the AWS SDK", async () => {
+  const request = await signedBedrockRequest(
+    {
+      type: "aws-bedrock",
+      accessKeyId: "TESTACCESSKEY00000000",
+      secretAccessKey: "never-send-this-secret",
+      sessionToken: "session-token",
+      model: "us.amazon.nova-pro-v1:0",
+      region: "us-east-1",
+    },
+    '{"messages":[]}',
+    new Date("2026-09-29T04:00:00.000Z"),
+  );
+  const authorization = new Headers(request.init.headers).get("authorization") ?? "";
+
+  assert(
+    request.url ===
+      "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.amazon.nova-pro-v1%3A0/converse",
+    "the request URL keeps single encoding",
+  );
+  // Expected value computed offline with botocore SigV4Auth for the same request. SigV4 signs the
+  // path URI-encoded twice, so a signer that reuses the request path gets a 403 from Bedrock.
+  assert(
+    authorization.endsWith(
+      "Signature=aa16d48c1eb9ad5a7f44598077a0b66dfac62b2fa43461219cced86c8d666cbe",
+    ),
+    "signature must match the AWS SDK for a model ID with a colon",
+  );
+});

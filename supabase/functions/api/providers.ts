@@ -542,7 +542,11 @@ export async function signedBedrockRequest(
 ): Promise<{ url: string; init: RequestInit }> {
   const domain = config.region.startsWith("cn-") ? "amazonaws.com.cn" : "amazonaws.com";
   const host = `bedrock-runtime.${config.region}.${domain}`;
-  const path = `/model/${encodeURIComponent(config.model)}/converse`;
+  const encodedModel = encodeURIComponent(config.model);
+  const path = `/model/${encodedModel}/converse`;
+  // SigV4 signs the path with each segment URI-encoded twice for every service except S3, so a
+  // model ID such as "us.amazon.nova-pro-v1:0" is signed as "%253A" but sent as "%3A".
+  const canonicalPath = `/model/${encodeURIComponent(encodedModel)}/converse`;
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
   const date = amzDate.slice(0, 8);
   const bodyHash = await sha256(body);
@@ -562,7 +566,7 @@ export async function signedBedrockRequest(
   ].join("\n") + "\n";
   const canonicalRequest = [
     "POST",
-    path,
+    canonicalPath,
     "",
     canonicalHeaders,
     signedHeaderNames.join(";"),
