@@ -25,8 +25,12 @@ import {
 import {
   parseModelJson,
   planValidatorModelId,
+  refineTaskPlanWithModel,
+  reviewTaskPlanForApprovalWithModel,
   TaskPlanValidationError,
+  validateTaskPlanFeedback,
   validateTaskPlanInput,
+  validateTaskPlanRevisionHistory,
   validateTaskPlanWithModel,
 } from "./task_plan.ts";
 
@@ -131,7 +135,7 @@ function requestEnvironment(): "local" | "aws" | "unknown" {
 function normalizedRoute(path: string): string {
   if (/^\/v1\/images\/[^/]+$/.test(path)) return "/v1/images/:imageId";
   if (/^\/v1\/task-plans\/[^/]+$/.test(path)) return "/v1/task-plans/:taskPlanId";
-  if (/^\/v1\/task-plans\/[^/]+\/(approve|validate)$/.test(path)) {
+  if (/^\/v1\/task-plans\/[^/]+\/(approve|refine|validate)$/.test(path)) {
     return "/v1/task-plans/:taskPlanId/:action";
   }
   if (/^\/v1\/task-runs\/[^/]+$/.test(path)) return "/v1/task-runs/:taskRunId";
@@ -412,9 +416,32 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
           ) as result
         `)[0].result as T;
       }
+      case "edge_api_refine_task_plan": {
+        return (await database`
+          select app.refine_task_plan(
+            ${parameters.p_task_plan_id as string},
+            ${ownerId},
+            ${parameters.p_expected_version as number},
+            ${parameters.p_client_request_id as string},
+            ${database.json(parameters.p_source_steps as postgres.JSONValue)},
+            ${parameters.p_revision_request as string},
+            ${parameters.p_revision_summary as string}
+          ) as result
+        `)[0].result as T;
+      }
       case "edge_api_approve_task_plan": {
         return (await database`
           select app.approve_task_plan(${parameters.p_task_plan_id as string}, ${ownerId}) as result
+        `)[0].result as T;
+      }
+      case "edge_api_approve_task_plan_with_review": {
+        return (await database`
+          select app.approve_task_plan_with_review(
+            ${parameters.p_task_plan_id as string},
+            ${ownerId},
+            ${parameters.p_expected_version as number},
+            ${database.json(parameters.p_validation_result as postgres.JSONValue)}
+          ) as result
         `)[0].result as T;
       }
       case "edge_api_start_task_run": {
@@ -1564,19 +1591,269 @@ async function handleTaskPlanValidation(request: Request, taskPlanId: string): P
   return jsonResponse(await getTaskPlan(taskPlanId, user.id));
 }
 
-async function handleTaskPlanApprove(request: Request, taskPlanId: string): Promise<Response> {
+function validateTaskPlanVersion(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new ApiError(422, "expectedVersion must be a positive integer.");
+  }
+  return value as number;
+}
+
+async function handleTaskPlanRefinement(request: Request, taskPlanId: string): Promise<Response> {
   const user = await authenticate(request);
-  await getTaskPlan(taskPlanId, user.id);
-  const approved = await rpc<string>("edge_api_approve_task_plan", {
-    p_task_plan_id: taskPlanId,
-    p_owner_id: user.id,
-  });
-  if (approved !== "approved") {
+  const payload = await requestJson(request);
+  const clientRequestId = validateUuid(payload.clientRequestId, "clientRequestId");
+  const expectedVersion = validateTaskPlanVersion(payload.expectedVersion);
+  let feedback: string;
+  try {
+    feedback = validateTaskPlanFeedback(payload.message);
+  } catch (error) {
+    return taskPlanInputError(error);
+  }
+
+  const plan = await getTaskPlan(taskPlanId, user.id);
+  let history;
+  try {
+    history = validateTaskPlanRevisionHistory(plan.revisionHistory);
+  } catch {
+    throw new ApiError(
+      500,
+      "Task plan revision history is invalid.",
+      false,
+      "task_plan_storage_invalid",
+    );
+  }
+  const duplicate = history.find((turn) => turn.clientRequestId === clientRequestId);
+  if (duplicate) {
+    if (duplicate.request !== feedback) {
+      throw new ApiError(
+        409,
+        "clientRequestId was already used for a different plan change.",
+        false,
+        "task_plan_idempotency_conflict",
+      );
+    }
+    return jsonResponse(plan);
+  }
+  if (plan.currentVersion !== expectedVersion) {
     throw new ApiError(
       409,
-      "Task plan must have a review without open clarification questions before approval.",
+      "Task plan changed. Read it again and retry.",
       false,
-      "task_plan_not_ready",
+      "task_plan_stale",
+    );
+  }
+  if (plan.status !== "draft" && plan.status !== "awaiting_approval") {
+    throw new ApiError(
+      409,
+      "Only a draft or reviewed plan with no task run can be refined.",
+      false,
+      "task_plan_not_refinable",
+    );
+  }
+
+  let input;
+  try {
+    if (!Array.isArray(plan.sourceSteps)) {
+      throw new TaskPlanValidationError("Invalid source steps.");
+    }
+    input = validateTaskPlanInput({ title: plan.title, steps: plan.sourceSteps });
+  } catch {
+    throw new ApiError(500, "Task plan storage is invalid.", false, "task_plan_storage_invalid");
+  }
+
+  let refinement;
+  try {
+    refinement = await refineTaskPlanWithModel(
+      awsRegion(),
+      await bedrockCredentials(),
+      input,
+      history,
+      feedback,
+      plan.validation,
+    );
+  } catch (error) {
+    if (error instanceof TaskPlanValidationError) {
+      throw new ApiError(
+        503,
+        "Plan refinement returned an unusable proposal.",
+        false,
+        "plan_refinement_invalid_response",
+        { model: planValidatorModelId, suggested_action: "Rephrase the change and retry." },
+      );
+    }
+    throw new ApiError(
+      503,
+      "Plan refinement is temporarily unavailable.",
+      false,
+      "plan_refinement_unavailable",
+      {
+        model: planValidatorModelId,
+        failure_type: error instanceof Error ? error.name : "UnknownError",
+        suggested_action: "Retry shortly with the same clientRequestId.",
+      },
+    );
+  }
+
+  const result = await rpc<string>("edge_api_refine_task_plan", {
+    p_task_plan_id: taskPlanId,
+    p_owner_id: user.id,
+    p_expected_version: expectedVersion,
+    p_client_request_id: clientRequestId,
+    p_source_steps: refinement.steps,
+    p_revision_request: feedback,
+    p_revision_summary: refinement.summary,
+  });
+  if (result === "already_applied") return jsonResponse(await getTaskPlan(taskPlanId, user.id));
+  if (result === "not_found") {
+    throw new ApiError(404, "Task plan not found.", false, "task_plan_not_found");
+  }
+  if (result === "stale") {
+    throw new ApiError(
+      409,
+      "Task plan changed. Read it again and retry.",
+      false,
+      "task_plan_stale",
+    );
+  }
+  if (result === "not_refinable") {
+    throw new ApiError(
+      409,
+      "This task plan can no longer be refined.",
+      false,
+      "task_plan_not_refinable",
+    );
+  }
+  if (result === "has_runs") {
+    throw new ApiError(
+      409,
+      "A task run already exists for this plan.",
+      false,
+      "task_plan_has_runs",
+    );
+  }
+  if (result === "revision_limit") {
+    throw new ApiError(
+      409,
+      "This plan reached its refinement limit.",
+      false,
+      "task_plan_revision_limit",
+    );
+  }
+  if (result === "idempotency_conflict") {
+    throw new ApiError(
+      409,
+      "clientRequestId was already used for a different plan change.",
+      false,
+      "task_plan_idempotency_conflict",
+    );
+  }
+  if (result !== "saved") {
+    throw new ApiError(500, "Plan refinement could not be saved.", false, "task_plan_save_failed");
+  }
+  return jsonResponse(await getTaskPlan(taskPlanId, user.id));
+}
+
+async function handleTaskPlanApprove(request: Request, taskPlanId: string): Promise<Response> {
+  const user = await authenticate(request);
+  const plan = await getTaskPlan(taskPlanId, user.id);
+  if (plan.status === "approved") return jsonResponse(plan);
+  if (plan.status !== "draft" && plan.status !== "awaiting_approval") {
+    throw new ApiError(
+      409,
+      "This task plan cannot be approved.",
+      false,
+      "task_plan_not_approvable",
+    );
+  }
+  if (!Array.isArray(plan.sourceSteps) || typeof plan.currentVersion !== "number") {
+    throw new ApiError(500, "Task plan storage is invalid.", false, "task_plan_storage_invalid");
+  }
+  let input;
+  try {
+    input = validateTaskPlanInput({ title: plan.title, steps: plan.sourceSteps });
+  } catch {
+    throw new ApiError(500, "Task plan storage is invalid.", false, "task_plan_storage_invalid");
+  }
+  let review;
+  try {
+    review = await reviewTaskPlanForApprovalWithModel(
+      awsRegion(),
+      await bedrockCredentials(),
+      input,
+    );
+  } catch (error) {
+    if (error instanceof TaskPlanValidationError) {
+      throw new ApiError(
+        503,
+        "The approval review returned an unusable result. Retry shortly.",
+        false,
+        "plan_approval_review_invalid_response",
+        { model: planValidatorModelId, suggested_action: "Retry shortly." },
+      );
+    }
+    throw new ApiError(
+      503,
+      "The approval review is temporarily unavailable. Retry shortly.",
+      false,
+      "plan_approval_review_unavailable",
+      {
+        model: planValidatorModelId,
+        failure_type: error instanceof Error ? error.name : "UnknownError",
+        suggested_action: "Retry shortly.",
+      },
+    );
+  }
+  const approved = await rpc<string>("edge_api_approve_task_plan_with_review", {
+    p_task_plan_id: taskPlanId,
+    p_owner_id: user.id,
+    p_expected_version: plan.currentVersion,
+    p_validation_result: review,
+  });
+  if (approved === "guidelines_failed") {
+    throw new ApiError(
+      409,
+      "The plan did not pass its approval review. Resolve the blockers and try again.",
+      false,
+      "task_plan_guidelines_failed",
+      {
+        approval_blocker_count: review.approvalBlockers.length,
+        suggested_action: "Read the task plan for its review, refine it, then retry approval.",
+      },
+    );
+  }
+  if (approved === "stale") {
+    throw new ApiError(
+      409,
+      "Task plan changed during approval review. Retry.",
+      false,
+      "task_plan_stale",
+    );
+  }
+  if (approved === "has_runs") {
+    throw new ApiError(
+      409,
+      "A task run already exists for this plan.",
+      false,
+      "task_plan_has_runs",
+    );
+  }
+  if (approved === "not_found") {
+    throw new ApiError(404, "Task plan not found.", false, "task_plan_not_found");
+  }
+  if (approved === "not_approvable") {
+    throw new ApiError(
+      409,
+      "This task plan cannot be approved.",
+      false,
+      "task_plan_not_approvable",
+    );
+  }
+  if (approved !== "approved") {
+    throw new ApiError(
+      500,
+      "Plan approval could not be saved.",
+      false,
+      "task_plan_approval_failed",
     );
   }
   return jsonResponse(await getTaskPlan(taskPlanId, user.id));
@@ -1747,7 +2024,7 @@ Deno.serve(async (request: Request) => {
     } else {
       const imageDelete = path.match(/^\/v1\/images\/([^/]+)$/);
       const taskPlan = path.match(/^\/v1\/task-plans\/([^/]+)$/);
-      const taskPlanAction = path.match(/^\/v1\/task-plans\/([^/]+)\/(approve|validate)$/);
+      const taskPlanAction = path.match(/^\/v1\/task-plans\/([^/]+)\/(approve|refine|validate)$/);
       const taskRun = path.match(/^\/v1\/task-runs\/([^/]+)$/);
       const taskRunAction = path.match(/^\/v1\/task-runs\/([^/]+)\/(commands|stop)$/);
       const inferenceWindow = path.match(/^\/v1\/task-runs\/([^/]+)\/inference-windows$/);
@@ -1760,6 +2037,11 @@ Deno.serve(async (request: Request) => {
         );
       } else if (request.method === "POST" && taskPlanAction?.[2] === "validate") {
         response = await handleTaskPlanValidation(
+          request,
+          validateUuid(taskPlanAction[1], "taskPlanId"),
+        );
+      } else if (request.method === "POST" && taskPlanAction?.[2] === "refine") {
+        response = await handleTaskPlanRefinement(
           request,
           validateUuid(taskPlanAction[1], "taskPlanId"),
         );

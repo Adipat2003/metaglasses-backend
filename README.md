@@ -1,7 +1,8 @@
 # MetaGlasses backend
 
-The hosted MetaGlasses API runs as a single routed HTTP service on AWS. Its source remains under
-`supabase/functions/` while the migration is completed, but AWS EC2 is the deployed runtime.
+The hosted MetaGlasses API runs as a single routed HTTP service on AWS. Its Deno source remains
+under `supabase/functions/`, but AWS EC2 is the deployed runtime. Supabase is used for local
+development, not as the hosted application backend.
 
 ## Hosted API
 
@@ -18,6 +19,7 @@ Append the existing route to the environment base URL:
 - `POST /v1/images`
 - `DELETE /v1/images/{image_id}`
 - `POST /v1/task-plans`
+- `POST /v1/task-plans/{task_plan_id}/refine`
 - `POST /v1/task-plans/{task_plan_id}/validate`
 - `POST /v1/task-plans/{task_plan_id}/approve`
 - `POST /v1/task-runs`
@@ -30,10 +32,11 @@ lens display route uses the random pairing token as its capability credential. T
 returns permissive CORS headers. CORS does not replace authentication or pairing ownership
 enforcement.
 
-Task guidance uses Claude Haiku to validate a user-authored plan, then Nova Lite to observe
+Task guidance uses GLM 4.7 Flash for plan refinement and a separate strict approval review, then Nova Lite to observe
 one to three recent images. The user remains responsible for confirming, skipping, pausing, or
 stopping every task transition. See [task-plan validation](docs/task-plan-validation.md) for the
-state machine and [local development](docs/local-development.md) for the smoke test.
+state machine, [approval guidelines](docs/task-plan-approval-guidelines.md), and
+[local development](docs/local-development.md) for the smoke test.
 
 ## Temporary images
 
@@ -177,31 +180,18 @@ database, and Python reference API instructions.
 
 ## CI and deployment
 
-CI validates the Python reference implementation, TypeScript Edge Functions, database
-configuration, and tests. The Postman repository validates its own collection artifacts.
+CI validates the Python reference implementation, TypeScript API, database configuration, and
+tests. After a push to `main`, `aws-deploy.yml` builds and deploys the API container to AWS using
+GitHub OIDC and SSM, and applies pending RDS migrations before restarting the service.
 
-After successful CI on `main`, CD automatically applies migrations and deploys functions to
-the trial Supabase project. Production is never deployed by a normal push. Run the `CD`
-workflow manually from `main`, then approve the protected `production` GitHub environment.
-
-Each GitHub environment requires:
-
-- `SUPABASE_ACCESS_TOKEN`: a current Supabase personal access token
-- `SUPABASE_DB_PASSWORD`: the database password for that environment
-
-Each Supabase project requires this Edge Function secret:
-
-- `NVIDIA_API_KEY`
-
-Supabase provides `SUPABASE_URL`, database connectivity, publishable keys, and secret keys to
-Edge Functions automatically. Do not copy those values into GitHub.
-
-See [Deployment and operations](docs/deployment.md) for setup, release, and recovery.
+AWS infrastructure is managed separately through CloudFormation. See
+[AWS deployment and operations](docs/aws-deployment.md) for setup, release, and recovery.
 
 ## Local Python reference implementation
 
 The Python API under `app/` remains available for local development and contract tests. It is
-not a hosted deployment target. Trial and production use the Supabase Edge API exclusively.
+not a hosted deployment target. Hosted requests go through API Gateway to the Deno API container
+on EC2.
 
 Run the reference service locally:
 
