@@ -293,6 +293,15 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     start_migration = (
         ROOT / "database" / "migrations" / "0006_publish_task_run_start.sql"
     ).read_text(encoding="utf-8")
+    refinement_migration = (
+        ROOT / "database" / "migrations" / "0008_task_plan_refinements.sql"
+    ).read_text(encoding="utf-8")
+    approval_migration = (
+        ROOT / "database" / "migrations" / "0009_task_plan_approval_review.sql"
+    ).read_text(encoding="utf-8")
+    approval_guidelines = (
+        ROOT / "docs" / "task-plan-approval-guidelines.md"
+    ).read_text(encoding="utf-8")
     template = (ROOT / "infrastructure" / "aws" / "compute-foundation.yaml").read_text(
         encoding="utf-8"
     )
@@ -300,6 +309,14 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     ci_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     assert '"zai.glm-4.7-flash"' in validator_source
+    assert "refineTaskPlanWithModel" in api_source
+    assert "reviewTaskPlanForApprovalWithModel" in api_source
+    assert 'taskPlanAction?.[2] === "refine"' in api_source
+    assert 'taskPlanAction?.[2] === "approve"' in api_source
+    assert "task_plan_guidelines_failed" in api_source
+    assert "approvalReviewGuidelines" in validator_source
+    assert "Visual observability" in approval_guidelines
+    assert "task_plan_guidelines_failed" in approval_guidelines
     assert "validateModelPlan" in validator_source
     assert "POST\" && path === \"/v1/task-plans\"" in api_source
     assert "POST\" && path === \"/v1/task-runs\"" in api_source
@@ -322,6 +339,23 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     assert "bedrock:InvokeModel" in template
     assert "us.amazon.nova-lite-v1:0" in template
     assert "foundation-model/zai.glm-4.7-flash" in template
+    assert "create or replace function app.refine_task_plan" in refinement_migration
+    assert "for update of plan" in refinement_migration
+    assert "plan_record.current_version <> p_expected_version" in refinement_migration
+    assert "return 'has_runs'" in refinement_migration
+    assert "return 'revision_limit'" in refinement_migration
+    assert "revision_request_id" in refinement_migration
+    assert "revoke all on function app.refine_task_plan" in refinement_migration
+    assert "grant execute on function app.refine_task_plan" in refinement_migration
+    assert "create or replace function app.approve_task_plan_with_review" in approval_migration
+    assert "for update of plan" in approval_migration
+    assert "plan_record.current_version <> p_expected_version" in approval_migration
+    assert "return 'guidelines_failed'" in approval_migration
+    assert (
+        "revoke all on function app.approve_task_plan(uuid, uuid) from metaglasses_api"
+        in approval_migration
+    )
+    assert "grant execute on function app.approve_task_plan_with_review" in approval_migration
     assert "DATABASE_MIGRATOR_USER=metaglasses_migrator" in template
     assert "supabase/functions/migrate.ts" in workflow
     assert "supabase/functions/api/task_plan_test.ts" in ci_workflow

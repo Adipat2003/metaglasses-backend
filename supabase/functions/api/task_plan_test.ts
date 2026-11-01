@@ -1,8 +1,13 @@
 import {
   parseModelJson,
   planValidatorModelId,
+  refineTaskPlanWithModel,
+  reviewTaskPlanForApprovalWithModel,
   validateModelPlan,
+  validateTaskPlanFeedback,
   validateTaskPlanInput,
+  validateTaskPlanRefinement,
+  validateTaskPlanRevisionHistory,
 } from "./task_plan.ts";
 
 const sourcePlan = validateTaskPlanInput({
@@ -28,6 +33,8 @@ function validModelPlan(): Record<string, unknown> {
     })),
     planRisks: [],
     unsupportedClaims: [],
+    guidelineChecks: { clarity: true, completeness: true, observability: true, safety: true },
+    approvalBlockers: [],
   };
 }
 
@@ -62,11 +69,158 @@ Deno.test("task plan rejects an empty instruction list", () => {
   assertThrows(() => validateTaskPlanInput({ title: "Install bracket", steps: [] }));
 });
 
+Deno.test("task plan feedback is normalized and bounded", () => {
+  assert(validateTaskPlanFeedback("  Make step two clearer.  ") === "Make step two clearer.");
+  assertThrows(() => validateTaskPlanFeedback("   "));
+  assertThrows(() => validateTaskPlanFeedback("x".repeat(2_001)));
+});
+
+Deno.test("refinement accepts a bounded proposed step list", () => {
+  const revision = validateTaskPlanRefinement({
+    changeSummary: "Clarified the level check.",
+    steps: [
+      { instruction: "Hold the bracket against the marked wall position." },
+      { instruction: "Check the bracket level with a bubble level." },
+    ],
+  }, sourcePlan.title);
+  assert(revision.steps[1].instruction === "Check the bracket level with a bubble level.");
+});
+
+Deno.test("refinement rejects empty, oversized, or malformed proposals", () => {
+  assertThrows(() => validateTaskPlanRefinement({ changeSummary: "No steps", steps: [] }, "Plan"));
+  assertThrows(() => validateTaskPlanRefinement({ changeSummary: "Bad", steps: [{ instruction: " " }] }, "Plan"));
+  assertThrows(() => validateTaskPlanRefinement({ changeSummary: " ", steps: [{ instruction: "Do it." }] }, "Plan"));
+});
+
+Deno.test("revision history is bounded and preserves idempotency keys", () => {
+  const history = validateTaskPlanRevisionHistory([{
+    clientRequestId: "f4480458-d081-7070-381b-28dc3d03ea39",
+    request: "Make step two clearer.",
+    summary: "Clarified the level check.",
+  }]);
+  assert(history.length === 1);
+  assert(history[0].clientRequestId === "f4480458-d081-7070-381b-28dc3d03ea39");
+  assertThrows(() => validateTaskPlanRevisionHistory(Array.from({ length: 11 }, () => ({}))));
+});
+
+Deno.test("sends current plan, conversation history, and feedback to the refiner", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody: Record<string, unknown> | undefined;
+  globalThis.fetch = async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body));
+    return Response.json({
+      output: {
+        message: {
+          content: [{
+            text: JSON.stringify({
+              changeSummary: "Clarified the level check.",
+              steps: sourcePlan.steps.map((step, index) => ({
+                instruction: index === 1
+                  ? "Check the bracket level with a bubble level."
+                  : step.instruction,
+              })),
+            }),
+          }],
+        },
+      },
+    });
+  };
+  try {
+    const result = await refineTaskPlanWithModel(
+      "us-east-1",
+      { accessKeyId: "test-key", secretAccessKey: "test-secret" },
+      sourcePlan,
+      [{
+        clientRequestId: "f4480458-d081-7070-381b-28dc3d03ea39",
+        request: "Keep the existing order.",
+        summary: "The order was preserved.",
+      }],
+      "Make step two say how to check level.",
+      { planSummary: "Install the bracket in two steps." },
+    );
+    assert(result.steps[1].instruction === "Check the bracket level with a bubble level.");
+    const content = ((requestBody?.messages as Array<{ content: Array<{ text: string }> }>)[0]
+      .content[0].text);
+    assert(content.includes("Make step two say how to check level."));
+    assert(content.includes("The order was preserved."));
+    assert(content.includes("Install the bracket in two steps."));
+    assert((requestBody?.system as Array<{ text: string }>)[0].text.includes("untrusted user data"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("approval review uses stricter explicit guidelines", async () => {
+  const originalFetch = globalThis.fetch;
+  let systemPrompt = "";
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    systemPrompt = body.system[0].text;
+    return Response.json({
+      output: { message: { content: [{ text: JSON.stringify(validModelPlan()) }] } },
+    });
+  };
+  try {
+    const result = await reviewTaskPlanForApprovalWithModel(
+      "us-east-1",
+      { accessKeyId: "test-key", secretAccessKey: "test-secret" },
+      sourcePlan,
+    );
+    assert(result.approvalReady);
+    assert(systemPrompt.includes("independent final approval reviewer"));
+    assert(systemPrompt.includes("Be strict"));
+    assert(systemPrompt.includes("visual verification"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("model plan preserves the exact source ordering", () => {
+  const validated = validateModelPlan(validModelPlan(), sourcePlan.steps);
+  assert(validated.steps.length === 2, "Expected two validated steps.");
+  assert(validated.approvalReady, "Expected the fully passing review to be approval ready.");
+});
+
+Deno.test("failed guideline checks create an approval blocker", () => {
+  const modelPlan = validModelPlan();
+  (modelPlan.guidelineChecks as Record<string, boolean>).observability = false;
+  const validated = validateModelPlan(modelPlan, sourcePlan.steps);
+  assert(!validated.approvalReady, "A failed guideline must block approval.");
   assert(
-    validateModelPlan(validModelPlan(), sourcePlan.steps).steps.length === 2,
-    "Expected two validated steps.",
+    validated.approvalBlockers.includes("Make every step visually verifiable."),
+    "Expected an actionable observability blocker.",
   );
+});
+
+Deno.test("missing visual evidence criteria blocks approval even if the model says pass", () => {
+  const modelPlan = validModelPlan();
+  (modelPlan.steps as Array<Record<string, unknown>>)[0].visualAcceptanceCriteria = [];
+  const validated = validateModelPlan(modelPlan, sourcePlan.steps);
+  assert(!validated.approvalReady, "A step without visual criteria cannot pass review.");
+  assert(!validated.guidelineChecks.observability);
+  assert(validated.approvalBlockers.includes("Make every step visually verifiable."));
+});
+
+Deno.test("high-risk actions without confirmation block approval", () => {
+  const modelPlan = validModelPlan();
+  (modelPlan.steps as Array<Record<string, unknown>>)[0].riskLevel = "high";
+  const validated = validateModelPlan(modelPlan, sourcePlan.steps);
+  assert(!validated.approvalReady, "High-risk actions require confirmation.");
+  assert(
+    validated.approvalBlockers.includes("High-risk steps must require user confirmation."),
+    "Expected the high-risk confirmation blocker.",
+  );
+});
+
+Deno.test("unsupported claims and clarification questions block approval", () => {
+  const modelPlan = validModelPlan();
+  modelPlan.unsupportedClaims = ["The bracket is definitely anchored in a stud."];
+  modelPlan.needsUserClarification = true;
+  modelPlan.clarificationQuestions = ["Which wall material is present?"];
+  const validated = validateModelPlan(modelPlan, sourcePlan.steps);
+  assert(!validated.approvalReady, "Unresolved claims and questions must block approval.");
+  assert(validated.approvalBlockers.includes("Resolve unsupported claims before approval."));
+  assert(validated.approvalBlockers.includes("Which wall material is present?"));
 });
 
 Deno.test("model plan rejects rewritten canonical instructions", () => {

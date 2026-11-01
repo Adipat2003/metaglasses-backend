@@ -319,8 +319,11 @@ Explain the normal task-guidance sequence:
 
 ```text
 Authenticated user submits ordered steps
-  -> GLM 4.7 Flash validates the plan
-  -> user reviews and explicitly approves it
+  -> GLM 4.7 Flash reviews ambiguity and visual criteria
+  -> user can send natural-language revision requests and review new versions
+  -> user requests approval
+  -> GLM runs a separate strict guideline review on the current version
+  -> backend enforces the rubric and returns blockers or approves that version
   -> user starts a task run
   -> client uploads 1-3 recent images
   -> Nova produces a bounded observation
@@ -332,6 +335,7 @@ The relevant API routes are:
 
 ```text
 POST /v1/task-plans
+POST /v1/task-plans/{taskPlanId}/refine
 POST /v1/task-plans/{taskPlanId}/validate
 POST /v1/task-plans/{taskPlanId}/approve
 POST /v1/task-runs
