@@ -22,21 +22,8 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 2
 
-      - name: Detect Edge API contract source changes
-        id: contract
-        env:
-          BACKEND_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          if git diff-tree --no-commit-id --name-only -r "$BACKEND_SHA" -- \
-            supabase/functions/api config/env/edge-functions.env.example | grep -q .; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Check GitHub App configuration
         id: sync
-        if: steps.contract.outputs.changed == 'true'
         env:
           POSTMAN_SYNC_APP_ID: ${{ vars.POSTMAN_SYNC_APP_ID }}
           POSTMAN_SYNC_APP_PRIVATE_KEY: ${{ secrets.POSTMAN_SYNC_APP_PRIVATE_KEY }}

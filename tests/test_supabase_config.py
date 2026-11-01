@@ -371,6 +371,20 @@ def test_task_guidance_smoke_test_requires_explicit_confirmation() -> None:
     assert "/stop" in smoke_test
 
 
+def test_successful_main_ci_always_dispatches_postman_contract_check() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "notify-postman-contract.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "workflow_run:" in workflow
+    assert "workflows: [CI]" in workflow
+    assert "branches: [main]" in workflow
+    assert "github.event.workflow_run.conclusion == 'success'" in workflow
+    assert 'github.event.workflow_run.event == \'push\'' in workflow
+    assert "Dispatch canonical Postman sync" in workflow
+    assert "Detect Edge API contract source changes" not in workflow
+
+
 def test_api_container_allows_the_sdk_to_read_the_os_release() -> None:
     # The AWS SDK reads the OS release for its user-agent on every call. Without this
     # permission Deno raises NotCapable and S3 calls fail as "Image storage unavailable".
