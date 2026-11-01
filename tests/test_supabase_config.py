@@ -151,6 +151,8 @@ def test_compute_bootstrap_writes_non_secret_runtime_configuration() -> None:
     assert "NVIDIA_SECRET_ARN=${NvidiaSecretArn}" in template
     assert "DATABASE_HOST=${DatabaseHost}" in template
     assert "COGNITO_USER_POOL_ID=${CognitoUserPoolId}" in template
+    assert "CognitoAdditionalAppClientIds:" in template
+    assert "COGNITO_ADDITIONAL_APP_CLIENT_IDS=${CognitoAdditionalAppClientIds}" in template
     assert "chmod 600 /opt/metaglasses/runtime.env" in template
     assert (
         "repo:Adipat2003@99374679/metaglasses-backend@1357463095:ref:refs/heads/main"
