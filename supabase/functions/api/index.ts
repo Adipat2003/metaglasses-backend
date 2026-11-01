@@ -27,7 +27,7 @@ import {
   planValidatorModelId,
   TaskPlanValidationError,
   validateTaskPlanInput,
-  validateTaskPlanWithClaude,
+  validateTaskPlanWithModel,
 } from "./task_plan.ts";
 
 const pairingTtlSeconds = 3600;
@@ -1521,7 +1521,7 @@ async function handleTaskPlanValidation(request: Request, taskPlanId: string): P
   }
   let validation;
   try {
-    validation = await validateTaskPlanWithClaude(
+    validation = await validateTaskPlanWithModel(
       awsRegion(),
       await bedrockCredentials(),
       input,
