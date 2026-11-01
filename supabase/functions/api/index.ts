@@ -1,5 +1,6 @@
 import { NvidiaPendingResponseError, resolveNvidiaResponseWithFallbacks } from "./nvidia.ts";
 import { CognitoJwtVerifier } from "npm:aws-jwt-verify@5.2.1";
+import { configuredCognitoClientIds } from "./cognito_clients.ts";
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -333,7 +334,10 @@ const s3 = new S3Client({ region: awsRegion() });
 const secrets = new SecretsManagerClient({ region: awsRegion() });
 const verifier = CognitoJwtVerifier.create({
   userPoolId: requiredEnvironment("COGNITO_USER_POOL_ID"),
-  clientId: requiredEnvironment("COGNITO_APP_CLIENT_ID"),
+  clientId: configuredCognitoClientIds(
+    requiredEnvironment("COGNITO_APP_CLIENT_ID"),
+    Deno.env.get("COGNITO_ADDITIONAL_APP_CLIENT_IDS"),
+  ),
   tokenUse: "access",
 });
 const databaseSigner = new Signer({

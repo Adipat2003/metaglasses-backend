@@ -31,6 +31,10 @@ Parameters:
     Type: String
   CognitoAppClientId:
     Type: String
+  CognitoAdditionalAppClientIds:
+    Type: String
+    Default: ""
+    Description: Comma-separated additional Cognito app client IDs accepted by the API, such as PostmanOAuthAppClientId.
   AmiId:
     Type: AWS::EC2::Image::Id
   InstanceType:
@@ -159,6 +163,7 @@ Resources:
               AWS_REGION=${AWS::Region}
               COGNITO_USER_POOL_ID=${CognitoUserPoolId}
               COGNITO_APP_CLIENT_ID=${CognitoAppClientId}
+              COGNITO_ADDITIONAL_APP_CLIENT_IDS=${CognitoAdditionalAppClientIds}
               DATABASE_HOST=${DatabaseHost}
               DATABASE_PORT=5432
               DATABASE_NAME=metaglasses

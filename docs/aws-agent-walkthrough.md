@@ -150,6 +150,12 @@ Explain:
 Do not list users, reset passwords, create users, change MFA, or modify app clients unless the
 human explicitly asks for that exact operation.
 
+The API validates the Cognito user pool, access-token use, and app client ID. Its primary client
+is `MobileAppClientId`; when Postman OAuth is used, configure the compute stack's
+`CognitoAdditionalAppClientIds` parameter with `PostmanOAuthAppClientId` as the additional value.
+This lets Postman tokens authenticate without disabling app-client validation. A compute stack
+update is required before the running API accepts Postman OAuth tokens.
+
 ## 3. Image storage: `metaglasses-storage`
 
 Explain: the private S3 bucket stores short-lived pairing images. The API accepts JPEG or PNG
