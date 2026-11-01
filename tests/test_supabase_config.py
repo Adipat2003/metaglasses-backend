@@ -171,7 +171,7 @@ def test_auth_foundation_keeps_srp_and_isolates_oauth_pkce_clients() -> None:
     assert "PostmanOAuthAppClient:" in template
     assert "AllowedOAuthFlowsUserPoolClient: true" in template
     assert '"glanss://auth/callback"' in template
-    assert '"https://oauth.pstmn.io/v1/browser-callback"' in template
+    assert '"https://oauth.pstmn.io/v1/callback"' in template
     assert "- code" in template
     assert "- implicit" not in template
     assert "GenerateSecret: true" not in template
