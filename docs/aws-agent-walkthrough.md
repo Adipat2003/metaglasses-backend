@@ -141,11 +141,20 @@ aws cloudformation describe-stacks \
 Explain:
 
 - `UserPoolId`: Cognito directory for MetaGlasses users.
-- `MobileAppClientId`: client identifier for the mobile application. It is not a user secret.
+- `MobileAppClientId`: legacy SRP client identifier for the mobile application. It is not a user secret.
+- `OAuthMobileAppClientId`: OAuth PKCE client identifier for the Glanss mobile callback.
+- `PostmanOAuthAppClientId`: OAuth PKCE client identifier for Postman browser testing.
+- `CognitoHostedUiBaseUrl`: base URL for the hosted UI OAuth endpoints.
 - `JwtIssuer`: issuer the API accepts when validating access tokens.
 
 Do not list users, reset passwords, create users, change MFA, or modify app clients unless the
 human explicitly asks for that exact operation.
+
+The API validates the Cognito user pool, access-token use, and app client ID. Its primary client
+is `MobileAppClientId`; when Postman OAuth is used, configure the compute stack's
+`CognitoAdditionalAppClientIds` parameter with `PostmanOAuthAppClientId` as the additional value.
+This lets Postman tokens authenticate without disabling app-client validation. A compute stack
+update is required before the running API accepts Postman OAuth tokens.
 
 ## 3. Image storage: `metaglasses-storage`
 
@@ -265,7 +274,7 @@ Explain the deliberate split between reasoning and visual observation:
 
 | Use | Fixed Bedrock model | Why |
 | --- | --- | --- |
-| Validate a user-authored task plan | `us.amazon.nova-pro-v1:0` (temporary; design target is `us.anthropic.claude-haiku-5-5`) | Plan normalization, ambiguity detection, and review metadata; Anthropic access is not yet enabled for the account |
+| Validate a user-authored task plan | `zai.glm-4.7-flash` | Text-only plan normalization, ambiguity detection, and review metadata |
 | Observe one to three recent task images | `us.amazon.nova-lite-v1:0` | Low-latency multimodal observation in the live loop |
 | Escalate uncertain or high-consequence verification | `us.amazon.nova-2-lite-v1:0` | Use selectively, not on every window |
 
@@ -278,7 +287,7 @@ Read-only inventory commands:
 aws bedrock list-foundation-models \
   --profile PowerUserAccess-995342110760 \
   --region us-east-1 \
-  --query 'modelSummaries[?contains(modelId, `nova`) || contains(modelId, `claude`)].[modelId,modelName,inputModalities,outputModalities]' \
+  --query 'modelSummaries[?contains(modelId, `nova`) || contains(modelId, `zai`)].[modelId,modelName,inputModalities,outputModalities]' \
   --output table
 
 aws bedrock list-inference-profiles \
@@ -310,8 +319,11 @@ Explain the normal task-guidance sequence:
 
 ```text
 Authenticated user submits ordered steps
-  -> Claude validates the plan
-  -> user reviews and explicitly approves it
+  -> GLM 4.7 Flash reviews ambiguity and visual criteria
+  -> user can send natural-language revision requests and review new versions
+  -> user requests approval
+  -> GLM runs a separate strict guideline review on the current version
+  -> backend enforces the rubric and returns blockers or approves that version
   -> user starts a task run
   -> client uploads 1-3 recent images
   -> Nova produces a bounded observation
@@ -323,6 +335,7 @@ The relevant API routes are:
 
 ```text
 POST /v1/task-plans
+POST /v1/task-plans/{taskPlanId}/refine
 POST /v1/task-plans/{taskPlanId}/validate
 POST /v1/task-plans/{taskPlanId}/approve
 POST /v1/task-runs
@@ -333,7 +346,7 @@ POST /v1/task-runs/{taskRunId}/stop
 
 For a live end-to-end test, use a dedicated Cognito test user and a new pairing token. The guarded
 script [smoke-task-guidance-api.sh](../scripts/smoke-task-guidance-api.sh) changes pairing display
-state, creates a task record, calls Claude and Nova, and may incur model charges. It requires the
+state, creates a task record, calls GLM and Nova, and may incur model charges. It requires the
 human's explicit approval immediately before running it. Follow the command in
 [local-development.md](local-development.md#validation).
 

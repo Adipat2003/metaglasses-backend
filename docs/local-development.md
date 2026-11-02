@@ -232,7 +232,7 @@ EXPECT_CHAT=true bash scripts/smoke-edge-api.sh
 ```
 
 Run the task-guidance smoke test only with a dedicated test user and pairing. It creates a plan,
-uploads one disposable image, invokes Claude and Nova, and stops the resulting task run. The
+uploads one disposable image, invokes GLM and Nova, and stops the resulting task run. The
 explicit confirmation prevents accidental use against a personal glasses session:
 
 ```bash

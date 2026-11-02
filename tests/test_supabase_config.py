@@ -151,12 +151,35 @@ def test_compute_bootstrap_writes_non_secret_runtime_configuration() -> None:
     assert "NVIDIA_SECRET_ARN=${NvidiaSecretArn}" in template
     assert "DATABASE_HOST=${DatabaseHost}" in template
     assert "COGNITO_USER_POOL_ID=${CognitoUserPoolId}" in template
+    assert "CognitoAdditionalAppClientIds:" in template
+    assert "COGNITO_ADDITIONAL_APP_CLIENT_IDS=${CognitoAdditionalAppClientIds}" in template
     assert "chmod 600 /opt/metaglasses/runtime.env" in template
     assert (
         "repo:Adipat2003@99374679/metaglasses-backend@1357463095:ref:refs/heads/main"
         in template
     )
     assert not (ROOT / ".github" / "workflows" / "cd.yml").exists()
+
+
+def test_auth_foundation_keeps_srp_and_isolates_oauth_pkce_clients() -> None:
+    template = (ROOT / "infrastructure" / "aws" / "auth-foundation.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ALLOW_USER_SRP_AUTH" in template
+    assert "OAuthUserPoolDomain:" in template
+    assert "ManagedLoginVersion: 1" in template
+    assert "OAuthMobileAppClient:" in template
+    assert "PostmanOAuthAppClient:" in template
+    assert "AllowedOAuthFlowsUserPoolClient: true" in template
+    assert '"glanss://auth/callback"' in template
+    assert '"https://oauth.pstmn.io/v1/browser-callback"' in template
+    assert "- code" in template
+    assert "- implicit" not in template
+    assert "GenerateSecret: true" not in template
+    assert "OAuthMobileAppClientId:" in template
+    assert "PostmanOAuthAppClientId:" in template
+    assert "CognitoHostedUiBaseUrl:" in template
 
 
 def test_github_deploy_role_can_push_ecr_images() -> None:
@@ -270,13 +293,30 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     start_migration = (
         ROOT / "database" / "migrations" / "0006_publish_task_run_start.sql"
     ).read_text(encoding="utf-8")
+    refinement_migration = (
+        ROOT / "database" / "migrations" / "0008_task_plan_refinements.sql"
+    ).read_text(encoding="utf-8")
+    approval_migration = (
+        ROOT / "database" / "migrations" / "0009_task_plan_approval_review.sql"
+    ).read_text(encoding="utf-8")
+    approval_guidelines = (
+        ROOT / "docs" / "task-plan-approval-guidelines.md"
+    ).read_text(encoding="utf-8")
     template = (ROOT / "infrastructure" / "aws" / "compute-foundation.yaml").read_text(
         encoding="utf-8"
     )
     workflow = (ROOT / ".github" / "workflows" / "aws-deploy.yml").read_text(encoding="utf-8")
     ci_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
-    assert '"us.amazon.nova-pro-v1:0"' in validator_source
+    assert '"zai.glm-4.7-flash"' in validator_source
+    assert "refineTaskPlanWithModel" in api_source
+    assert "reviewTaskPlanForApprovalWithModel" in api_source
+    assert 'taskPlanAction?.[2] === "refine"' in api_source
+    assert 'taskPlanAction?.[2] === "approve"' in api_source
+    assert "task_plan_guidelines_failed" in api_source
+    assert "approvalReviewGuidelines" in validator_source
+    assert "Visual observability" in approval_guidelines
+    assert "task_plan_guidelines_failed" in approval_guidelines
     assert "validateModelPlan" in validator_source
     assert "POST\" && path === \"/v1/task-plans\"" in api_source
     assert "POST\" && path === \"/v1/task-runs\"" in api_source
@@ -298,7 +338,24 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     assert "publish_task_run_start" in start_migration
     assert "bedrock:InvokeModel" in template
     assert "us.amazon.nova-lite-v1:0" in template
-    assert "us.amazon.nova-pro-v1:0" in template
+    assert "foundation-model/zai.glm-4.7-flash" in template
+    assert "create or replace function app.refine_task_plan" in refinement_migration
+    assert "for update of plan" in refinement_migration
+    assert "plan_record.current_version <> p_expected_version" in refinement_migration
+    assert "return 'has_runs'" in refinement_migration
+    assert "return 'revision_limit'" in refinement_migration
+    assert "revision_request_id" in refinement_migration
+    assert "revoke all on function app.refine_task_plan" in refinement_migration
+    assert "grant execute on function app.refine_task_plan" in refinement_migration
+    assert "create or replace function app.approve_task_plan_with_review" in approval_migration
+    assert "for update of plan" in approval_migration
+    assert "plan_record.current_version <> p_expected_version" in approval_migration
+    assert "return 'guidelines_failed'" in approval_migration
+    assert (
+        "revoke all on function app.approve_task_plan(uuid, uuid) from metaglasses_api"
+        in approval_migration
+    )
+    assert "grant execute on function app.approve_task_plan_with_review" in approval_migration
     assert "DATABASE_MIGRATOR_USER=metaglasses_migrator" in template
     assert "supabase/functions/migrate.ts" in workflow
     assert "supabase/functions/api/task_plan_test.ts" in ci_workflow
@@ -312,6 +369,20 @@ def test_task_guidance_smoke_test_requires_explicit_confirmation() -> None:
     assert "/v1/task-plans" in smoke_test
     assert "/inference-windows" in smoke_test
     assert "/stop" in smoke_test
+
+
+def test_successful_main_ci_always_dispatches_postman_contract_check() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "notify-postman-contract.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "workflow_run:" in workflow
+    assert "workflows: [CI]" in workflow
+    assert "branches: [main]" in workflow
+    assert "github.event.workflow_run.conclusion == 'success'" in workflow
+    assert 'github.event.workflow_run.event == \'push\'' in workflow
+    assert "Dispatch canonical Postman sync" in workflow
+    assert "Detect Edge API contract source changes" not in workflow
 
 
 def test_api_container_allows_the_sdk_to_read_the_os_release() -> None:
