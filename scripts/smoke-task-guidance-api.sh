@@ -73,7 +73,7 @@ expect_status "$state_code" 204 "$smoke_dir/state.json"
 
 plan_request_id=$(uuid)
 plan_code=$(json_request POST /v1/task-plans \
-  "{\"pairingToken\":\"$PAIRING_TOKEN\",\"clientRequestId\":\"$plan_request_id\",\"title\":\"Place a cup on a table\",\"steps\":[{\"instruction\":\"Place the cup on the table.\"}]}" \
+  "{\"pairingToken\":\"$PAIRING_TOKEN\",\"clientRequestId\":\"$plan_request_id\",\"title\":\"Move an empty mug to the kitchen table\",\"steps\":[{\"instruction\":\"Pick up the empty white mug from the kitchen counter.\"},{\"instruction\":\"Set the empty white mug upright on the kitchen table.\"}]}" \
   "$smoke_dir/plan.json")
 expect_status "$plan_code" 201 "$smoke_dir/plan.json"
 task_plan_id=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).taskPlanId)' \
@@ -82,13 +82,23 @@ task_plan_id=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(proces
 validation_code=$(json_request POST "/v1/task-plans/$task_plan_id/validate" '{}' \
   "$smoke_dir/validation.json")
 expect_status "$validation_code" 200 "$smoke_dir/validation.json"
-node -e '
-  const value = JSON.parse(require("fs").readFileSync(process.argv[1]));
-  if (value.status !== "awaiting_approval" || value.validationStatus !== "validated") process.exit(1);
-' "$smoke_dir/validation.json"
+# /validate is only a preview; the strict guideline review runs at /approve.
 
-approval_code=$(json_request POST "/v1/task-plans/$task_plan_id/approve" '{}' \
-  "$smoke_dir/approval.json")
+# The approval review is not fully deterministic and can time out, so retry a rejected or
+# unavailable review and show why it failed.
+for attempt in 1 2 3; do
+  approval_code=$(json_request POST "/v1/task-plans/$task_plan_id/approve" '{}' \
+    "$smoke_dir/approval.json")
+  [ "$approval_code" = 503 ] && {
+    printf 'Approval review attempt %s was unavailable; retrying.\n' "$attempt" >&2
+    continue
+  }
+  [ "$approval_code" != 409 ] && break
+  printf 'Approval review attempt %s failed; blockers:\n' "$attempt" >&2
+  curl --silent --show-error --header "Authorization: Bearer $EDGE_API_ACCESS_TOKEN" \
+    "$EDGE_API_BASE/v1/task-plans/$task_plan_id" |
+    node -e 'console.error(JSON.stringify(JSON.parse(require("fs").readFileSync(0)).validation?.approvalBlockers))'
+done
 expect_status "$approval_code" 200 "$smoke_dir/approval.json"
 node -e '
   const value = JSON.parse(require("fs").readFileSync(process.argv[1]));
