@@ -281,7 +281,7 @@ The command is handled and recorded by code. It is never authority for a model t
 
 Use `scripts/smoke-task-guidance-api.sh` with a dedicated Cognito test user and pairing. It
 activates the pairing, creates a short plan, validates it with GLM, approves it, starts a run,
-uploads a valid one-pixel PNG, queues a Nova observation, waits for the observation display update,
+uploads a small 64x64 PNG (Nova rejects a one-pixel image), queues a Nova observation, waits for the observation display update,
 repeats the current instruction, stops the run, and deletes the test image.
 
 The script requires explicit confirmation because it changes the selected pairing display and

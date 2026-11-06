@@ -243,6 +243,18 @@ PAIRING_TOKEN="<32_HEX_CHARACTERS>" \
 bash scripts/smoke-task-guidance-api.sh
 ```
 
+`scripts/smoke_token.py` gets the access token for the dedicated test user. `login` sets the
+user's password from a hidden prompt and needs AWS credentials that can call
+`cognito-idp:AdminSetUserPassword`. `refresh` needs no password or AWS credentials. Tokens are
+saved with mode 0600 in `~/.metaglasses-smoke` (override with `SMOKE_TOKEN_DIR`), outside the
+repository. Access tokens last 15 minutes, so refresh before each run:
+
+```bash
+AWS_PROFILE="<ADMIN_PROFILE>" uv run --with boto3 --with pycognito python scripts/smoke_token.py login
+uv run --with boto3 python scripts/smoke_token.py refresh
+EDGE_API_ACCESS_TOKEN="$(cat ~/.metaglasses-smoke/access_token)"
+```
+
 ## Stop and clean up
 
 Stop only the Python reference API:
