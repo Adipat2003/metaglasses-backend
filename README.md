@@ -1,8 +1,8 @@
 # MetaGlasses backend
 
 The hosted MetaGlasses API runs as a single routed HTTP service on AWS. Its Deno source remains
-under `supabase/functions/`, but AWS EC2 is the deployed runtime. Supabase is used for local
-development, not as the hosted application backend.
+under `supabase/functions/` for historical path compatibility. AWS EC2 is the application runtime;
+Cognito, RDS, and S3 provide authentication, data, and image storage.
 
 ## Hosted API
 
@@ -19,10 +19,12 @@ Append the existing route to the environment base URL:
 - `POST /v1/images`
 - `DELETE /v1/images/{image_id}`
 - `POST /v1/task-plans`
+- `GET /v1/task-plans/{task_plan_id}`
 - `POST /v1/task-plans/{task_plan_id}/refine`
 - `POST /v1/task-plans/{task_plan_id}/validate`
 - `POST /v1/task-plans/{task_plan_id}/approve`
 - `POST /v1/task-runs`
+- `GET /v1/task-runs/{task_run_id}`
 - `POST /v1/task-runs/{task_run_id}/commands`
 - `POST /v1/task-runs/{task_run_id}/inference-windows`
 - `POST /v1/task-runs/{task_run_id}/stop`
@@ -44,7 +46,7 @@ Register an active pairing with `POST /v1/state`, then upload JPEG or PNG bytes:
 
 ```http
 POST /v1/images?pairingToken=<PAIRING_TOKEN>
-Authorization: Bearer <SUPABASE_ACCESS_TOKEN>
+Authorization: Bearer <COGNITO_ACCESS_TOKEN>
 Content-Type: image/jpeg
 
 <IMAGE_BYTES>
@@ -140,45 +142,17 @@ system prompt or inject server-side context.
 The canonical MetaGlasses Postman collection and environments live in the separate
 [`Adipat2003/metaglasses-postman`](https://github.com/Adipat2003/metaglasses-postman) repository.
 Use that repository to import the collection and duplicate the selected environment before adding
-a project publishable key or test-user credentials. Do not commit populated environments here.
+test-user credentials. Do not commit populated environments here.
 
 After each successful CI run for a merge to `main`, GitHub dispatches the exact backend revision to
 the canonical Postman repository. Its contract workflow verifies route alignment and opens a PR
 only when the API source contract has changed. This backend intentionally does not carry generated
 Postman exports or environments.
 
-## Local Supabase development
+## Local development
 
-Docker is required for the local Supabase stack.
-
-```bash
-cp supabase/signing_keys.example.json supabase/signing_keys.json
-npx --yes supabase@2.116.0 gen signing-key --algorithm ES256 --append
-cp config/env/edge-functions.env.example supabase/functions/.env
-npx --yes supabase@2.116.0 start
-```
-
-Add a development NVIDIA credential to `supabase/functions/.env` only when exercising chat.
-The local API base URL is:
-
-```text
-http://127.0.0.1:54321/functions/v1/api
-```
-
-Reset the local database and replay every migration:
-
-```bash
-npx --yes supabase@2.116.0 db reset --local --yes
-```
-
-Run the local authenticated API and image smoke test:
-
-```bash
-bash scripts/smoke-edge-api.sh
-```
-
-See [Local development and Docker](docs/local-development.md) for local Auth, Storage,
-database, and Python reference API instructions.
+See [local development](docs/local-development.md) for repository checks, the Python reference
+service, and the AWS integration smoke test. The reference service does not reproduce the AWS API.
 
 ## CI and deployment
 
@@ -205,26 +179,12 @@ uv run uvicorn app.main:app --reload --env-file .env.local
 
 ## Validate the repository
 
-```bash
-uv run ruff check .
-uv run python -m pytest
-docker run --rm --volume "$PWD:/work" --workdir /work \
-  denoland/deno:2.5.2 deno fmt --config supabase/functions/deno.json \
-  --check supabase/functions
-docker run --rm --volume "$PWD:/work" --workdir /work \
-  denoland/deno:2.5.2 deno check --config supabase/functions/deno.json \
-  supabase/functions/api/index.ts \
-  supabase/functions/cleanup-pairing-images/index.ts
-docker run --rm --volume "$PWD:/work" --workdir /work \
-  denoland/deno:2.5.2 deno test --config supabase/functions/deno.json \
-  supabase/functions/api/nvidia_test.ts
-```
+Run the pinned checks documented in [local development](docs/local-development.md#validation).
 
 ## Documentation
 
-- [Deployment and operations](docs/deployment.md)
 - [AWS deployment and operations](docs/aws-deployment.md)
-- [Supabase setup and security](docs/supabase.md)
-- [Local development and Docker](docs/local-development.md)
+- [Backend and frontend integration handoff](docs/backend-frontend-handoff.md)
+- [Local development and validation](docs/local-development.md)
 - [Task-plan validation and live guidance design](docs/task-plan-validation.md)
 - [Repository contribution guidance](AGENTS.md)

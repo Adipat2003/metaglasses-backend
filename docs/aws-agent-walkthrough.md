@@ -276,7 +276,6 @@ Explain the deliberate split between reasoning and visual observation:
 | --- | --- | --- |
 | Validate a user-authored task plan | `zai.glm-4.7-flash` | Text-only plan normalization, ambiguity detection, and review metadata |
 | Observe one to three recent task images | `us.amazon.nova-lite-v1:0` | Low-latency multimodal observation in the live loop |
-| Escalate uncertain or high-consequence verification | `us.amazon.nova-2-lite-v1:0` | Use selectively, not on every window |
 
 The models advise only. Code owns the state machine. A model can suggest that a step is complete or
 blocked, but it cannot confirm, skip, stop, or advance a task on its own.
@@ -348,7 +347,7 @@ For a live end-to-end test, use a dedicated Cognito test user and a new pairing 
 script [smoke-task-guidance-api.sh](../scripts/smoke-task-guidance-api.sh) changes pairing display
 state, creates a task record, calls GLM and Nova, and may incur model charges. It requires the
 human's explicit approval immediately before running it. Follow the command in
-[local-development.md](local-development.md#validation).
+[local-development.md](local-development.md#aws-integration-smoke-test).
 
 ## 8. Observability, audit, and incident triage
 
