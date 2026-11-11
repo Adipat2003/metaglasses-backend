@@ -1,317 +1,71 @@
-# Local development and Docker
+# Local development and validation
 
-Local development supports two application runtimes:
-
-- The production-shaped Supabase Edge API with local Auth, Postgres, and Storage.
-- The Python reference API on the host or in Docker for local contract testing.
-
-Real environment files, generated signing keys, OAuth credentials, and local Supabase state
-are ignored by Git.
+The hosted API is the Deno service on AWS. Its source is under `supabase/functions/` for historical
+path compatibility. It requires Cognito, RDS, S3, and AWS credentials and is not reproduced by the
+old Supabase local stack. Do not use the Python reference service as a substitute for hosted API
+contract testing.
 
 ## Prerequisites
 
-- Python 3.12
-- `uv`
-- Docker Desktop or another Docker-compatible runtime
-- Node.js for the pinned Supabase CLI command
+- Python 3.12 and `uv` for the reference app and repository configuration tests.
+- Docker for the pinned Deno 2.5.2 checks and application image build.
+- An AWS environment, Cognito test account, and access token for the optional integration smoke test.
 
-This repository uses Supabase CLI `2.116.0` in documented commands. Keep the version
-pinned so local behavior does not change unexpectedly.
+Install the locked Python environment with `uv sync --locked --all-groups`.
 
-## Python reference API only
-
-Use this mode for unit tests and API work that does not need real Auth, shared Postgres, or
-Storage:
+## Local Python reference
 
 ```bash
 cp config/env/python-local.env.example .env.local
-uv sync --all-groups
 uv run uvicorn app.main:app --reload --env-file .env.local
-```
-
-`.env.local` sets `APP_ENV=local`, `AUTH_MODE=disabled`, and wildcard CORS. Pairing
-state is process-local and disappears when the process restarts. Add `NVIDIA_API_KEY` only
-if you need real model requests.
-
-Verify:
-
-```bash
 curl --fail http://127.0.0.1:8000/healthz
 ```
 
-## Full local Supabase Edge API
-
-Generate a developer-only ES256 signing key before the first start:
-
-```bash
-cp supabase/signing_keys.example.json supabase/signing_keys.json
-npx --yes supabase@2.116.0 gen signing-key --algorithm ES256 --append
-cp config/env/edge-functions.env.example supabase/functions/.env
-npx --yes supabase@2.116.0 start
-```
-
-Supabase applies the checked-in migrations, creates the private local bucket, and serves the
-`api` and `cleanup-pairing-images` Edge Functions. The generated signing key and populated
-function environment must remain local.
-
-The local API base URL is:
-
-```text
-http://127.0.0.1:54321/functions/v1/api
-```
-
-Health does not require a token:
-
-```bash
-curl --fail http://127.0.0.1:54321/functions/v1/api/healthz
-```
-
-Add `NVIDIA_API_KEY` to `supabase/functions/.env` before testing `/v1/chat`. Local Auth,
-pairing, display, and image operations do not require an NVIDIA credential.
-
-Reset disposable local data and replay every migration:
-
-```bash
-npx --yes supabase@2.116.0 db reset --local --yes
-```
-
-### Create a local authenticated session
-
-Create a user through the local Auth endpoint or use the Supabase client in the mobile app.
-The CLI prints the local publishable key after `supabase start`. Protected Edge API routes
-require the resulting user access token:
-
-```http
-POST http://127.0.0.1:54321/functions/v1/api/v1/state
-Authorization: Bearer <LOCAL_USER_ACCESS_TOKEN>
-Content-Type: application/json
-
-{"pairingToken":"<32_HEX_CHARACTERS>","state":"listening"}
-```
-
-## Python reference API with local Supabase
-
-The CLI prints the local publishable key. Copy it into the ignored environment file used by
-the reference API.
-
-### Run the Python reference API on the host
-
-```bash
-cp config/env/python-authenticated.env.example .env.local-auth
-# Set SUPABASE_PUBLISHABLE_KEY and NVIDIA_API_KEY in .env.local-auth.
-uv run uvicorn app.main:app --reload --env-file .env.local-auth
-```
-
-The host process connects to Supabase at `127.0.0.1`.
-
-### Run the Python reference API in Docker
-
-```bash
-cp config/env/python-docker.env.example .env.docker
-# Set SUPABASE_PUBLISHABLE_KEY and NVIDIA_API_KEY in .env.docker.
-docker compose up --build
-```
-
-Start Supabase before Compose. The Compose project runs only the Python API container and uses
-the Supabase containers already created by the CLI.
-
-To use a differently named ignored environment file:
-
-```bash
-API_ENV_FILE=.env.docker.local docker compose up --build
-```
-
-## Docker environment details
-
-`config/env/python-docker.env.example` contains the correct container-to-host endpoints:
-
-| Variable | Value or source |
-| --- | --- |
-| `APP_ENV` | `local` |
-| `AUTH_MODE` | `required` |
-| `SUPABASE_URL` | `http://host.docker.internal:54321` |
-| `SUPABASE_JWT_ISSUER` | `http://127.0.0.1:54321/auth/v1` |
-| `SUPABASE_PUBLISHABLE_KEY` | Value printed by `supabase start` |
-| `DATABASE_URL` | `postgresql://postgres:postgres@host.docker.internal:54322/postgres` |
-| `PAIRING_IMAGE_BUCKET` | `Images` |
-| `NVIDIA_API_KEY` | Developer NVIDIA key if chat is tested |
-
-`SUPABASE_URL` uses the Docker host gateway so the container can reach Auth and Storage.
-`SUPABASE_JWT_ISSUER` remains the host-facing URL embedded in locally issued tokens.
-
-`docker-compose.yml` includes the Linux `host-gateway` mapping. Docker Desktop provides
-`host.docker.internal` on macOS and Windows.
-
-## Ports
-
-| Service | URL or port |
-| --- | --- |
-| Supabase Edge API | `http://127.0.0.1:54321/functions/v1/api` |
-| Supabase API and Auth | `http://127.0.0.1:54321` |
-| Supabase Postgres | `127.0.0.1:54322` |
-| Supabase Studio | `http://127.0.0.1:54323` |
-| Mailpit | `http://127.0.0.1:54324` |
-| Python reference API | `http://127.0.0.1:8000` |
-| Python reference API docs | `http://127.0.0.1:8000/docs` |
-
-## Local OAuth providers
-
-OAuth configuration is optional. Copy the ignored template:
-
-```bash
-cp config/env/oauth.env.example supabase/oauth.env
-set -a
-source supabase/oauth.env
-set +a
-npx --yes supabase@2.116.0 start
-```
-
-For Google, register:
-
-```text
-http://127.0.0.1:54321/auth/v1/callback
-```
-
-Apple web OAuth does not accept a loopback HTTP callback. Use a public HTTPS tunnel or test
-Apple sign-in against the hosted trial project.
+This local service runs without authentication, stores pairing state in process memory, and loses it
+when restarted. Add a development NVIDIA credential to the ignored `.env.local` only when testing
+model requests. It is not a deployment target and does not implement every hosted feature.
 
 ## Validation
 
-Run repository checks on the host:
+Run the same checks as CI:
 
 ```bash
 uv run ruff check .
 uv run python -m pytest
-docker build --tag metaglasses-backend:test .
 docker run --rm --volume "$PWD:/work" --workdir /work \
   denoland/deno:2.5.2 deno fmt --config supabase/functions/deno.json \
   --check supabase/functions
 docker run --rm --volume "$PWD:/work" --workdir /work \
   denoland/deno:2.5.2 deno check --config supabase/functions/deno.json \
-  supabase/functions/api/index.ts \
-  supabase/functions/cleanup-pairing-images/index.ts
+  supabase/functions/api/index.ts supabase/functions/cleanup-pairing-images/index.ts
 docker run --rm --volume "$PWD:/work" --workdir /work \
   denoland/deno:2.5.2 deno test --allow-env --config supabase/functions/deno.json \
-  supabase/functions/api/nvidia_test.ts \
-  supabase/functions/api/providers_test.ts \
+  supabase/functions/api/nvidia_test.ts supabase/functions/api/providers_test.ts \
   supabase/functions/api/task_plan_test.ts
+bash -n scripts/smoke-task-guidance-api.sh
 ```
 
-Verify the primary Edge API:
+The Docker image builds with `docker build -t metaglasses-api .`. Building does not verify AWS
+connectivity. See [AWS deployment and operations](aws-deployment.md) for infrastructure, runtime
+configuration, migrations, and deployment.
+
+## AWS integration smoke test
+
+`scripts/smoke-task-guidance-api.sh` creates a pairing and task records, changes lens display state,
+uploads an image, and calls paid models. Use a dedicated Cognito test user and pairing. Set these
+values in your local environment without committing or sharing them:
 
 ```bash
-curl --fail http://127.0.0.1:54321/functions/v1/api/healthz
-```
-
-Verify the Python reference Docker service:
-
-```bash
-curl --fail http://127.0.0.1:8000/healthz
-docker compose ps
-docker compose logs api
-```
-
-Both health responses should report `local` and `required` for authenticated full-stack
-setups.
-
-For an authenticated smoke test, sign up through local Supabase, obtain an access token,
-register a pairing with `/v1/state`, then exercise image operations.
-
-The repository automates Auth, state, display, image upload, deletion, unauthorized access,
-and CORS checks:
-
-```bash
-bash scripts/smoke-edge-api.sh
-```
-
-When a local NVIDIA-compatible mock or real development credential is configured, include
-the image-assisted chat check:
-
-```bash
-EXPECT_CHAT=true bash scripts/smoke-edge-api.sh
-```
-
-Run the task-guidance smoke test only with a dedicated test user and pairing. It creates a plan,
-uploads one disposable image, invokes GLM and Nova, and stops the resulting task run. The
-explicit confirmation prevents accidental use against a personal glasses session:
-
-```bash
-TASK_GUIDANCE_TEST_CONFIRM=yes \
-EDGE_API_BASE="<API_BASE_URL>" \
-EDGE_API_ACCESS_TOKEN="<COGNITO_ACCESS_TOKEN>" \
-PAIRING_TOKEN="<32_HEX_CHARACTERS>" \
+export EDGE_API_BASE="<CONFIRMED_API_BASE>"
+export EDGE_API_ACCESS_TOKEN="<COGNITO_ACCESS_TOKEN>"
+export PAIRING_TOKEN="<32_HEX_CHARACTERS>"
+export TASK_GUIDANCE_TEST_CONFIRM=yes
 bash scripts/smoke-task-guidance-api.sh
 ```
 
-## Stop and clean up
+The test attempts to stop the run and delete its image on exit, but audit records remain. A pass
+ends with `Task-guidance smoke test passed.` Do not run it against another user's pairing.
 
-Stop only the Python reference API:
-
-```bash
-docker compose down
-```
-
-Stop the Supabase stack separately:
-
-```bash
-npx --yes supabase@2.116.0 stop
-```
-
-Do not add `--no-backup` if you want to keep local database state. A database reset is
-destructive and should be used only when disposable local data can be recreated.
-
-## Troubleshooting
-
-### Edge API returns 500 or 503
-
-- Confirm `supabase status` reports Auth, Postgres, Storage, and Edge Runtime as healthy.
-- Run `npx --yes supabase@2.116.0 db reset --local --yes` after adding migrations.
-- Inspect Edge Runtime logs with
-  `docker logs supabase_edge_runtime_metaglasses-backend`.
-
-### Python reference API cannot reach Supabase
-
-- Confirm `supabase status` reports all local services.
-- Confirm the API container uses `host.docker.internal`, not `127.0.0.1`, for Supabase
-  and Postgres.
-- Confirm port 54321 and 54322 are not blocked or already occupied.
-
-### JWT issuer mismatch
-
-Keep `SUPABASE_JWT_ISSUER=http://127.0.0.1:54321/auth/v1` in the Docker environment. The
-container fetches keys through `host.docker.internal`, but the token issuer remains the
-host-facing URL.
-
-### Image upload returns 503
-
-- Confirm the private `Images` bucket exists in Studio.
-- Confirm all migrations were applied.
-- For the Python reference API, confirm `SUPABASE_PUBLISHABLE_KEY` matches the current
-  local stack.
-
-### Chat provider errors
-
-Confirm `NVIDIA_API_KEY` is populated in `supabase/functions/.env` for the Edge API or the
-selected local Python environment file. Health, Auth, pairing, and Storage can work without a
-model request, so a healthy response does not prove the NVIDIA credential is present. For the
-Edge API, inspect the structured `function_logs` record by `request_id`. Each provider error also
-returns `provider`, `model`, `upstream_status` when available, and `suggested_action` to the client.
-Credentials are excluded from logs and error responses.
-
-- `model_request_failed` indicates a timeout or network failure.
-- `model_pending_response_invalid` indicates an invalid NVIDIA polling response.
-- `model_provider_error` indicates a completed non-success provider response.
-- `model_invalid_response` indicates a successful provider response without usable text.
-- `provider_auth_rejected` indicates rejected BYOK credentials, account permissions, or billing.
-- `provider_model_not_found` indicates an unavailable model or Azure deployment name.
-- `provider_rate_limited` indicates provider quota or rate limiting.
-- `provider_request_rejected` indicates an unsupported chat or image request for the model.
-- `provider_configuration_invalid` identifies a missing or invalid provider field before a model
-  request is sent.
-
-## References
-
-- [Supabase CLI local development](https://supabase.com/docs/guides/local-development/cli/getting-started)
-- [Supabase local development with schema migrations](https://supabase.com/docs/guides/local-development)
-- [Supabase Edge Functions](https://supabase.com/docs/guides/functions)
-- [Docker Compose](https://docs.docker.com/compose/)
+The [frontend handoff](backend-frontend-handoff.md) documents authentication, endpoint contracts,
+limits, and client flows. The [canonical Postman repository](https://github.com/Adipat2003/metaglasses-postman)
+contains reusable requests and environment templates.
