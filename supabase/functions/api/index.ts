@@ -1,3 +1,8 @@
+import {
+  createPlanWithModel,
+  initialPlanRequest,
+  TaskPlanCreationConflict,
+} from "./task_plan_create.ts";
 import { NvidiaPendingResponseError, resolveNvidiaResponseWithFallbacks } from "./nvidia.ts";
 import { CognitoJwtVerifier } from "npm:aws-jwt-verify@5.2.1";
 import { configuredCognitoClientIds } from "./cognito_clients.ts";
@@ -27,6 +32,7 @@ import {
   planValidatorModelId,
   refineTaskPlanWithModel,
   reviewTaskPlanForApprovalWithModel,
+  TaskPlanProviderError,
   TaskPlanValidationError,
   validateTaskPlanFeedback,
   validateTaskPlanInput,
@@ -409,9 +415,10 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
       }
       case "edge_api_save_task_plan_validation": {
         return (await database`
-          select app.save_task_plan_validation(
+          select app.save_task_plan_validation_for_version(
             ${parameters.p_task_plan_id as string},
             ${ownerId},
+            ${parameters.p_expected_version as number},
             ${database.json(parameters.p_validation_result as postgres.JSONValue)}
           ) as result
         `)[0].result as T;
@@ -859,6 +866,9 @@ async function generateResponse(
         provider: "nvidia",
         model: providerModel,
         failure_type: error instanceof Error ? error.name : "UnknownError",
+        ...(error instanceof TaskPlanProviderError
+          ? { upstream_status: error.upstreamStatus }
+          : {}),
         suggested_action: "Retry shortly. If this continues, contact support with the request ID.",
       },
     );
@@ -1490,7 +1500,50 @@ function taskPlanInputError(error: unknown): never {
   throw error;
 }
 
-async function handleTaskPlanCreate(request: Request): Promise<Response> {
+async function taskPlanModelStage<T>(
+  requestId: string,
+  operation: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  const started = performance.now();
+  let failure: unknown;
+  try {
+    return await action();
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    try {
+      const entry = {
+        event: "task_plan_model_completed",
+        request_id: requestId,
+        operation,
+        environment: requestEnvironment(),
+        provider: "bedrock",
+        model: planValidatorModelId,
+        outcome: failure ? "failure" : "success",
+        duration_ms: Math.round(performance.now() - started),
+        ...(failure
+          ? {
+            error_code: failure instanceof TaskPlanValidationError
+              ? "invalid_model_response"
+              : "model_request_failed",
+            failure_type: failure instanceof Error ? failure.name : "UnknownError",
+            ...(failure instanceof TaskPlanProviderError
+              ? { upstream_status: failure.upstreamStatus }
+              : {}),
+          }
+          : {}),
+      };
+      if (failure) console.error(JSON.stringify(entry));
+      else console.info(JSON.stringify(entry));
+    } catch {
+      // Logging must not change the response.
+    }
+  }
+}
+
+async function handleTaskPlanCreate(request: Request, requestId: string): Promise<Response> {
   const user = await authenticate(request);
   const payload = await requestJson(request);
   const token = validateToken(payload.pairingToken);
@@ -1502,24 +1555,108 @@ async function handleTaskPlanCreate(request: Request): Promise<Response> {
     return taskPlanInputError(error);
   }
   await pairingAccess(token, user.id);
-  const plan = await rpc<TaskPlan | null>("edge_api_create_task_plan", {
-    p_task_plan_id: crypto.randomUUID(),
-    p_token_hash: await tokenHash(token),
-    p_owner_id: user.id,
-    p_client_request_id: clientRequestId,
-    p_title: planInput.title,
-    p_source_steps: planInput.steps,
-  });
-  if (!plan) {
-    throw new ApiError(401, "Unknown or expired pairing token. Re-pair on the phone.", true);
+  let plan: TaskPlan;
+  try {
+    plan = await createPlanWithModel(planInput, clientRequestId, {
+      createDraft: async () => {
+        const draft = await rpc<TaskPlan | null>("edge_api_create_task_plan", {
+          p_task_plan_id: crypto.randomUUID(),
+          p_token_hash: await tokenHash(token),
+          p_owner_id: user.id,
+          p_client_request_id: clientRequestId,
+          p_title: planInput.title,
+          p_source_steps: planInput.steps,
+        });
+        if (!draft) {
+          throw new ApiError(401, "Unknown or expired pairing token. Re-pair on the phone.", true);
+        }
+        return draft;
+      },
+      generate: async (input) => {
+        try {
+          return await taskPlanModelStage(
+            requestId,
+            "create",
+            async () =>
+              await refineTaskPlanWithModel(
+                awsRegion(),
+                await bedrockCredentials(),
+                input,
+                [],
+                initialPlanRequest,
+                null,
+              ),
+          );
+        } catch (error) {
+          if (error instanceof TaskPlanValidationError) {
+            throw new ApiError(
+              503,
+              "Plan creation returned an unusable proposal.",
+              false,
+              "plan_creation_invalid_response",
+              {
+                model: planValidatorModelId,
+                suggested_action: "Retry with the same clientRequestId.",
+              },
+            );
+          }
+          throw new ApiError(
+            503,
+            "Plan creation is temporarily unavailable.",
+            false,
+            "plan_creation_unavailable",
+            {
+              model: planValidatorModelId,
+              failure_type: error instanceof Error ? error.name : "UnknownError",
+              ...(error instanceof TaskPlanProviderError
+                ? { upstream_status: error.upstreamStatus }
+                : {}),
+              suggested_action: "Retry with the same clientRequestId.",
+            },
+          );
+        }
+      },
+      save: (planId, requestId, proposal) =>
+        rpc<string>("edge_api_refine_task_plan", {
+          p_task_plan_id: planId,
+          p_owner_id: user.id,
+          p_expected_version: 1,
+          p_client_request_id: requestId,
+          p_source_steps: proposal.steps,
+          p_revision_request: initialPlanRequest,
+          p_revision_summary: proposal.summary,
+        }),
+      read: (planId) => getTaskPlan(planId, user.id),
+    });
+  } catch (error) {
+    if (!(error instanceof TaskPlanCreationConflict)) throw error;
+    throw new ApiError(
+      409,
+      "The plan changed during creation. Read it and retry.",
+      false,
+      "task_plan_changed",
+      { suggested_action: "Retry with the same clientRequestId." },
+    );
   }
   if (plan.access === "forbidden") {
     throw new ApiError(403, "This pairing token belongs to another user.");
   }
+  if (plan.access === "idempotency_conflict") {
+    throw new ApiError(
+      409,
+      "clientRequestId was already used for a different plan.",
+      false,
+      "task_plan_idempotency_conflict",
+    );
+  }
   return jsonResponse(plan, 201);
 }
 
-async function handleTaskPlanValidation(request: Request, taskPlanId: string): Promise<Response> {
+async function handleTaskPlanValidation(
+  request: Request,
+  taskPlanId: string,
+  requestId: string,
+): Promise<Response> {
   const user = await authenticate(request);
   const plan = await getTaskPlan(taskPlanId, user.id);
   if (plan.status !== "draft") {
@@ -1531,7 +1668,7 @@ async function handleTaskPlanValidation(request: Request, taskPlanId: string): P
     );
   }
   const sourceSteps = plan.sourceSteps;
-  if (!Array.isArray(sourceSteps)) {
+  if (!Array.isArray(sourceSteps) || typeof plan.currentVersion !== "number") {
     throw new ApiError(500, "Task plan storage is invalid.", false, "task_plan_storage_invalid");
   }
   let input;
@@ -1542,10 +1679,10 @@ async function handleTaskPlanValidation(request: Request, taskPlanId: string): P
   }
   let validation;
   try {
-    validation = await validateTaskPlanWithModel(
-      awsRegion(),
-      await bedrockCredentials(),
-      input,
+    validation = await taskPlanModelStage(
+      requestId,
+      "validate",
+      async () => await validateTaskPlanWithModel(awsRegion(), await bedrockCredentials(), input),
     );
   } catch (error) {
     if (error instanceof TaskPlanValidationError) {
@@ -1565,6 +1702,9 @@ async function handleTaskPlanValidation(request: Request, taskPlanId: string): P
       {
         model: planValidatorModelId,
         failure_type: error instanceof Error ? error.name : "UnknownError",
+        ...(error instanceof TaskPlanProviderError
+          ? { upstream_status: error.upstreamStatus }
+          : {}),
         suggested_action: "Retry shortly.",
       },
     );
@@ -1572,6 +1712,7 @@ async function handleTaskPlanValidation(request: Request, taskPlanId: string): P
   const saved = await rpc<string>("edge_api_save_task_plan_validation", {
     p_task_plan_id: taskPlanId,
     p_owner_id: user.id,
+    p_expected_version: plan.currentVersion,
     p_validation_result: validation,
   });
   if (saved !== "saved") {
@@ -1592,7 +1733,11 @@ function validateTaskPlanVersion(value: unknown): number {
   return value as number;
 }
 
-async function handleTaskPlanRefinement(request: Request, taskPlanId: string): Promise<Response> {
+async function handleTaskPlanRefinement(
+  request: Request,
+  taskPlanId: string,
+  requestId: string,
+): Promise<Response> {
   const user = await authenticate(request);
   const payload = await requestJson(request);
   const clientRequestId = validateUuid(payload.clientRequestId, "clientRequestId");
@@ -1657,13 +1802,18 @@ async function handleTaskPlanRefinement(request: Request, taskPlanId: string): P
 
   let refinement;
   try {
-    refinement = await refineTaskPlanWithModel(
-      awsRegion(),
-      await bedrockCredentials(),
-      input,
-      history,
-      feedback,
-      plan.validation,
+    refinement = await taskPlanModelStage(
+      requestId,
+      "refine",
+      async () =>
+        await refineTaskPlanWithModel(
+          awsRegion(),
+          await bedrockCredentials(),
+          input,
+          history,
+          feedback,
+          plan.validation,
+        ),
     );
   } catch (error) {
     if (error instanceof TaskPlanValidationError) {
@@ -1683,6 +1833,9 @@ async function handleTaskPlanRefinement(request: Request, taskPlanId: string): P
       {
         model: planValidatorModelId,
         failure_type: error instanceof Error ? error.name : "UnknownError",
+        ...(error instanceof TaskPlanProviderError
+          ? { upstream_status: error.upstreamStatus }
+          : {}),
         suggested_action: "Retry shortly with the same clientRequestId.",
       },
     );
@@ -1747,7 +1900,11 @@ async function handleTaskPlanRefinement(request: Request, taskPlanId: string): P
   return jsonResponse(await getTaskPlan(taskPlanId, user.id));
 }
 
-async function handleTaskPlanApprove(request: Request, taskPlanId: string): Promise<Response> {
+async function handleTaskPlanApprove(
+  request: Request,
+  taskPlanId: string,
+  requestId: string,
+): Promise<Response> {
   const user = await authenticate(request);
   const plan = await getTaskPlan(taskPlanId, user.id);
   if (plan.status === "approved") return jsonResponse(plan);
@@ -1770,10 +1927,11 @@ async function handleTaskPlanApprove(request: Request, taskPlanId: string): Prom
   }
   let review;
   try {
-    review = await reviewTaskPlanForApprovalWithModel(
-      awsRegion(),
-      await bedrockCredentials(),
-      input,
+    review = await taskPlanModelStage(
+      requestId,
+      "approve",
+      async () =>
+        await reviewTaskPlanForApprovalWithModel(awsRegion(), await bedrockCredentials(), input),
     );
   } catch (error) {
     if (error instanceof TaskPlanValidationError) {
@@ -1793,6 +1951,9 @@ async function handleTaskPlanApprove(request: Request, taskPlanId: string): Prom
       {
         model: planValidatorModelId,
         failure_type: error instanceof Error ? error.name : "UnknownError",
+        ...(error instanceof TaskPlanProviderError
+          ? { upstream_status: error.upstreamStatus }
+          : {}),
         suggested_action: "Retry shortly.",
       },
     );
@@ -2012,7 +2173,7 @@ Deno.serve(async (request: Request) => {
     } else if (request.method === "POST" && path === "/v1/images") {
       response = await handleImageUpload(request, url);
     } else if (request.method === "POST" && path === "/v1/task-plans") {
-      response = await handleTaskPlanCreate(request);
+      response = await handleTaskPlanCreate(request, requestId);
     } else if (request.method === "POST" && path === "/v1/task-runs") {
       response = await handleTaskRunStart(request);
     } else {
@@ -2033,16 +2194,19 @@ Deno.serve(async (request: Request) => {
         response = await handleTaskPlanValidation(
           request,
           validateUuid(taskPlanAction[1], "taskPlanId"),
+          requestId,
         );
       } else if (request.method === "POST" && taskPlanAction?.[2] === "refine") {
         response = await handleTaskPlanRefinement(
           request,
           validateUuid(taskPlanAction[1], "taskPlanId"),
+          requestId,
         );
       } else if (request.method === "POST" && taskPlanAction?.[2] === "approve") {
         response = await handleTaskPlanApprove(
           request,
           validateUuid(taskPlanAction[1], "taskPlanId"),
+          requestId,
         );
       } else if (request.method === "GET" && taskRun) {
         const user = await authenticate(request);
@@ -2076,6 +2240,10 @@ Deno.serve(async (request: Request) => {
       : errorResponse(new ApiError(500, "Internal server error."), requestId);
   }
 
-  requestLog(request, path, requestId, response.status, startedAt, requestError);
+  try {
+    requestLog(request, path, requestId, response.status, startedAt, requestError);
+  } catch {
+    // Logging must not change the response.
+  }
   return response.status === 101 ? response : responseWithRequestId(response, requestId);
 });

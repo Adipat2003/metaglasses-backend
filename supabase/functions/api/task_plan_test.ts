@@ -3,6 +3,8 @@ import {
   planValidatorModelId,
   refineTaskPlanWithModel,
   reviewTaskPlanForApprovalWithModel,
+  TaskPlanProviderError,
+  TaskPlanValidationError,
   validateModelPlan,
   validateTaskPlanFeedback,
   validateTaskPlanInput,
@@ -257,5 +259,90 @@ Deno.test("parses model JSON wrapped in a markdown fence or prose", () => {
     ]
   ) {
     assert(JSON.stringify(parseModelJson(text)) === expected, `should parse: ${text}`);
+  }
+});
+
+Deno.test("plan model rejects an upstream error without exposing its body", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("private provider details", { status: 429 });
+  try {
+    await refineTaskPlanWithModel(
+      "us-east-1",
+      {
+        accessKeyId: "test-key",
+        secretAccessKey: "test-secret",
+      },
+      sourcePlan,
+      [],
+      "Clarify the plan.",
+      null,
+    );
+    throw new Error("Expected provider failure.");
+  } catch (error) {
+    if (!(error instanceof TaskPlanProviderError)) throw error;
+    assert(error.upstreamStatus === 429);
+    assert(!error.message.includes("private provider details"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("plan model rejects a malformed response", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json({ output: { message: { content: [{ text: "no JSON" }] } } });
+  try {
+    await refineTaskPlanWithModel(
+      "us-east-1",
+      {
+        accessKeyId: "test-key",
+        secretAccessKey: "test-secret",
+      },
+      sourcePlan,
+      [],
+      "Clarify the plan.",
+      null,
+    );
+    throw new Error("Expected invalid response.");
+  } catch (error) {
+    assert(error instanceof TaskPlanValidationError);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("plan model rejects truncated output even when the JSON is valid", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json({
+      stopReason: "max_tokens",
+      output: {
+        message: {
+          content: [{
+            text: JSON.stringify({
+              changeSummary: "Complete",
+              steps: sourcePlan.steps,
+            }),
+          }],
+        },
+      },
+    });
+  try {
+    await refineTaskPlanWithModel(
+      "us-east-1",
+      {
+        accessKeyId: "test-key",
+        secretAccessKey: "test-secret",
+      },
+      sourcePlan,
+      [],
+      "Clarify the plan.",
+      null,
+    );
+    throw new Error("Expected incomplete model response.");
+  } catch (error) {
+    if (!(error instanceof TaskPlanValidationError)) throw error;
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });

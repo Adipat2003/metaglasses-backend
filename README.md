@@ -32,7 +32,8 @@ lens display route uses the random pairing token as its capability credential. T
 returns permissive CORS headers. CORS does not replace authentication or pairing ownership
 enforcement.
 
-Task guidance uses GLM 4.7 Flash for plan refinement and a separate strict approval review, then Nova Lite to observe
+Task guidance uses GLM 4.7 Flash to generate an initial plan from the supplied steps, refine it,
+and perform a separate strict approval review, then Nova Lite to observe
 one to three recent images. The user remains responsible for confirming, skipping, pausing, or
 stopping every task transition. See [task-plan validation](docs/task-plan-validation.md) for the
 state machine, [approval guidelines](docs/task-plan-approval-guidelines.md), and
@@ -134,6 +135,9 @@ Common codes include `provider_configuration_invalid`, `provider_auth_rejected`,
 
 The API forwards only the user and assistant messages supplied in `messages`. It does not add a
 system prompt or inject server-side context.
+
+The [task-plan OpenAPI contract](docs/task-plan-openapi.yaml) describes plan creation, review,
+refinement, approval, request IDs, and errors.
 
 ## Postman
 

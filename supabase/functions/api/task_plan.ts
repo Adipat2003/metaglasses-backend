@@ -71,6 +71,13 @@ export interface ValidatedTaskPlan {
   approvalReady: boolean;
 }
 
+export class TaskPlanProviderError extends Error {
+  constructor(readonly upstreamStatus: number) {
+    super("Bedrock request failed.");
+    this.name = "TaskPlanProviderError";
+  }
+}
+
 export class TaskPlanValidationError extends Error {
   constructor(message: string) {
     super(message);
@@ -364,7 +371,7 @@ async function runPlanReview(
       ...request.init,
       signal: AbortSignal.timeout(planValidationTimeoutMilliseconds),
     });
-    if (!response.ok) throw new Error(`Bedrock returned HTTP ${response.status}.`);
+    if (!response.ok) throw new TaskPlanProviderError(response.status);
     return validateModelPlan(parseModelJson(modelText(await response.json())), plan.steps);
   } catch (error) {
     if (error instanceof TaskPlanValidationError || error instanceof SyntaxError) {
@@ -375,9 +382,13 @@ async function runPlanReview(
 }
 
 function modelText(response: unknown): string {
+  const stopReason = (response as { stopReason?: unknown } | null)?.stopReason;
+  if (stopReason !== undefined && stopReason !== "end_turn" && stopReason !== "stop_sequence") {
+    throw new TaskPlanValidationError("The model did not complete its response.");
+  }
   const text = (response as {
     output?: { message?: { content?: Array<{ text?: unknown }> } };
-  }).output?.message?.content?.find((content) => typeof content.text === "string")?.text;
+  } | null)?.output?.message?.content?.find((content) => typeof content.text === "string")?.text;
   if (typeof text !== "string" || !text.trim()) {
     throw new TaskPlanValidationError("The validator returned no JSON.");
   }
@@ -478,7 +489,7 @@ export async function refineTaskPlanWithModel(
       ...request.init,
       signal: AbortSignal.timeout(planRefinementTimeoutMilliseconds),
     });
-    if (!response.ok) throw new Error(`Bedrock returned HTTP ${response.status}.`);
+    if (!response.ok) throw new TaskPlanProviderError(response.status);
     return validateTaskPlanRefinement(
       parseModelJson(modelText(await response.json())),
       plan.title,

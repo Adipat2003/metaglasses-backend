@@ -1,5 +1,8 @@
 # Task-plan validation and live guidance design
 
+The machine-readable [task-plan OpenAPI contract](task-plan-openapi.yaml) describes requests,
+responses, and errors.
+
 ## Status and decision
 
 This document defines the architecture for user-authored task plans and live visual guidance. The
@@ -79,8 +82,13 @@ The product supports two input modes:
 2. **Free-form text:** Planned. The user will be able to paste instructions, a recipe, a manual
    excerpt, or a checklist for the model to normalize into a proposed plan.
 
-The implemented structured-list mode creates a `TaskPlanDraft`. A user must approve its exact
-`planVersion` before a task run can be created.
+The implemented structured-list mode stores the submitted steps as version 1, then calls the plan
+model once to create a proposed version 2. The response includes the generated source steps and
+revision summary. The user reviews the proposal and must approve its exact version before a run.
+A model failure returns a recoverable error; retry the same request with the same `clientRequestId`.
+The original draft remains stored for this retry. Concurrent retries may invoke the model
+more than once, but only the first saved proposal is used. A zero temperature and persisted
+results do not guarantee identical output from separate model calls.
 
 ### Deterministic validation before model use
 
@@ -208,7 +216,7 @@ POST /v1/task-runs/{taskRunId}/stop          implemented
 ```
 
 The implemented structured-list request is deliberately small and idempotent for an authenticated
-user:
+user. Reusing an ID with a different title, pairing, or steps returns `409 task_plan_idempotency_conflict`:
 
 ```json
 {
@@ -238,7 +246,7 @@ the current `expectedVersion`, and a new `clientRequestId`. GLM receives the cur
 revision requests and summaries, then returns proposed steps and a concise change summary. The API
 stores the proposal as a new immutable version, clears validation, and returns the plan to `draft`.
 Review the proposed steps. Call `validate` for an optional preview, or call `approve` directly to
-run the strict review and gate. You can repeat the refine/review cycle up to ten times. Refinement
+run the strict review and gate. The initial model proposal uses one revision; you can refine it up to nine more times. Refinement
 is disabled after approval or once any task run exists. The plan title stays fixed during
 refinement; create a new plan to change it.
 
