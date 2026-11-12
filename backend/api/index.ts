@@ -1432,6 +1432,9 @@ async function taskPlanModelStage<T>(
               ? "invalid_model_response"
               : "model_request_failed",
             failure_type: failure instanceof Error ? failure.name : "UnknownError",
+            ...(failure instanceof TaskPlanValidationError
+              ? { model_failure_reason: failure.reason }
+              : {}),
             ...(failure instanceof TaskPlanProviderError
               ? { upstream_status: failure.upstreamStatus }
               : {}),

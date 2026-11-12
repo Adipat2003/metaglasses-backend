@@ -53,6 +53,17 @@ function assertThrows(action: () => void): void {
   throw new Error("Expected the action to throw.");
 }
 
+function detailedStep(instruction: string) {
+  return {
+    instruction,
+    prechecks: ["Check the starting position."],
+    postchecks: ["Inspect the result."],
+    acceptanceCriteria: ["The bracket is in position."],
+    safetyNotes: [],
+    openQuestions: [],
+  };
+}
+
 Deno.test("task plan input normalizes source instructions", () => {
   assert(
     sourcePlan.steps[0].instruction === "Hold the bracket against the marked wall position.",
@@ -81,11 +92,35 @@ Deno.test("refinement accepts a bounded proposed step list", () => {
   const revision = validateTaskPlanRefinement({
     changeSummary: "Clarified the level check.",
     steps: [
-      { instruction: "Hold the bracket against the marked wall position." },
-      { instruction: "Check the bracket level with a bubble level." },
+      detailedStep("Hold the bracket against the marked wall position."),
+      detailedStep("Check the bracket level with a bubble level."),
     ],
   }, sourcePlan.title);
   assert(revision.steps[1].instruction === "Check the bracket level with a bubble level.");
+  assert(revision.steps[1].acceptanceCriteria?.length === 1);
+});
+
+Deno.test("step details survive input validation and remain bounded", () => {
+  const plan = validateTaskPlanInput({ title: "Plan", steps: [detailedStep("Do it.")] });
+  assert(plan.steps[0].prechecks?.[0] === "Check the starting position.");
+  assertThrows(() =>
+    validateTaskPlanInput({
+      title: "Plan",
+      steps: [{ ...detailedStep("Do it."), prechecks: ["x".repeat(241)] }],
+    })
+  );
+  assertThrows(() =>
+    validateTaskPlanInput({
+      title: "Plan",
+      steps: [{ ...detailedStep("Do it."), postchecks: ["a", "b", "c", "d"] }],
+    })
+  );
+  assertThrows(() =>
+    validateTaskPlanRefinement(
+      { changeSummary: "Updated", steps: [{ instruction: "Do it." }] },
+      "Plan",
+    )
+  );
 });
 
 Deno.test("refinement rejects empty, oversized, or malformed proposals", () => {
@@ -120,11 +155,11 @@ Deno.test("sends current plan, conversation history, and feedback to the refiner
           content: [{
             text: JSON.stringify({
               changeSummary: "Clarified the level check.",
-              steps: sourcePlan.steps.map((step, index) => ({
-                instruction: index === 1
-                  ? "Check the bracket level with a bubble level."
-                  : step.instruction,
-              })),
+              steps: sourcePlan.steps.map((step, index) =>
+                detailedStep(
+                  index === 1 ? "Check the bracket level with a bubble level." : step.instruction,
+                )
+              ),
             }),
           }],
         },
@@ -231,6 +266,56 @@ Deno.test("unsupported claims and clarification questions block approval", () =>
   assert(validated.approvalBlockers.includes("Which wall material is present?"));
 });
 
+Deno.test("unresolved source questions block approval even when the model passes", () => {
+  const steps = sourcePlan.steps.map((step, index) => ({
+    ...step,
+    openQuestions: index === 0 ? ["Which wall material?"] : [],
+  }));
+  const validated = validateModelPlan(validModelPlan(), steps);
+  assert(!validated.approvalReady);
+  assert(!validated.guidelineChecks.completeness);
+});
+
+Deno.test("review uses the backend source instruction without requiring a model copy", async () => {
+  const originalFetch = globalThis.fetch;
+  const review = validModelPlan();
+  for (const step of review.steps as Array<Record<string, unknown>>) {
+    delete step.canonicalInstruction;
+  }
+  globalThis.fetch = async () =>
+    Response.json({ output: { message: { content: [{ text: JSON.stringify(review) }] } } });
+  try {
+    const result = await reviewTaskPlanForApprovalWithModel("us-east-1", {
+      accessKeyId: "test-key",
+      secretAccessKey: "test-secret",
+    }, sourcePlan);
+    assert(result.steps[0].canonicalInstruction === sourcePlan.steps[0].instruction);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("review rejects a model response that changes step order", async () => {
+  const originalFetch = globalThis.fetch;
+  const review = validModelPlan();
+  (review.steps as Array<Record<string, unknown>>).reverse();
+  globalThis.fetch = async () =>
+    Response.json({ output: { message: { content: [{ text: JSON.stringify(review) }] } } });
+  try {
+    await reviewTaskPlanForApprovalWithModel(
+      "us-east-1",
+      { accessKeyId: "test-key", secretAccessKey: "test-secret" },
+      sourcePlan,
+    );
+    throw new Error("Expected invalid response.");
+  } catch (error) {
+    if (!(error instanceof TaskPlanValidationError)) throw error;
+    assert(error.reason === "source_mapping_mismatch");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("model plan rejects rewritten canonical instructions", () => {
   const modelPlan = validModelPlan();
   (modelPlan.steps as Array<Record<string, unknown>>)[0].canonicalInstruction = "Use a drill.";
@@ -305,7 +390,8 @@ Deno.test("plan model rejects a malformed response", async () => {
     );
     throw new Error("Expected invalid response.");
   } catch (error) {
-    assert(error instanceof TaskPlanValidationError);
+    if (!(error instanceof TaskPlanValidationError)) throw error;
+    assert(error.reason === "invalid_json");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -342,6 +428,7 @@ Deno.test("plan model rejects truncated output even when the JSON is valid", asy
     throw new Error("Expected incomplete model response.");
   } catch (error) {
     if (!(error instanceof TaskPlanValidationError)) throw error;
+    assert(error.reason === "incomplete_response");
   } finally {
     globalThis.fetch = originalFetch;
   }
