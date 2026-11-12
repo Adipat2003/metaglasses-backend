@@ -338,6 +338,56 @@ Upload 1-3 distinct JPEG or PNG images through the image endpoint for the run's 
 
 Use a positive, increasing sequence number for each new window and the run state version observed when capturing. Success is 202, for example `{"outcome":"accepted","inferenceWindowId":"<UUID>","sequenceNumber":1,"status":"queued","stateVersion":1,"createdAt":"<ISO_TIMESTAMP>"}`. It means queued, not observed or complete. In the AWS implementation the worker processes queued windows asynchronously and may publish a display prompt. No public endpoint in this router retrieves an individual window or observation; poll display and read run state as needed. An observation does not advance, confirm, skip, or stop the task. Old-state or out-of-order windows are rejected. Model calls can fail or be discarded, so do not promise a display update for every accepted window.
 
+### When the app should send frames: initial pilot policy
+
+The backend does not choose capture times or send a capture trigger to the app. Use this **proposed
+starting policy**, subject to testing on the actual device and AWS environment. The timings below
+are product defaults for an early, single-user pilot, not guarantees or limits imposed by the API.
+
+1. Ask the user for camera permission and an explicit start to visual guidance. Wait until
+   `POST /v1/task-runs` succeeds. Do not upload camera frames while reviewing a plan.
+2. While the run is `active` and the camera view is usable, capture one fresh JPEG or PNG frame.
+   Record the actual UTC capture timestamp and the run's latest `stateVersion`. Upload it and
+   submit a window containing that image ID. Start with a single frame to limit latency and data.
+3. Begin with a minimum **four-second interval between window submissions**, measured by a
+   monotonic device clock. Keep at most one upload or submission request in flight. Drop frames
+   locally instead of queuing them if a request is still running, connectivity is poor, the view
+   is obscured, or the app is backgrounded. Do not send a burst to catch up later.
+4. Because `202` means only queued, use the returned `inferenceWindowId` to look for a display
+   update whose `responseId` is `task_observation_<inferenceWindowId>`. Treat a match as evidence
+   that this particular observation reached the display; it is not a user confirmation. For this
+   conservative pilot, do not submit another window until the match is seen and the four-second
+   minimum has elapsed.
+5. If no matching display update is observed within **20 seconds**, stop automatic submissions and
+   show a recoverable status such as “Visual guidance is taking longer than expected.” Let the user
+   retry or continue using task commands. This timeout is a UI limit, not evidence that the backend
+   stopped processing. A later display update may still arrive. A shared display can be overwritten
+   by chat or another update, so a missing match does not prove the window failed.
+6. On a pause or stop action, stop capturing immediately. Resume only after the server confirms the
+   run is active and the app has its current state version. Every accepted command, including
+   `repeat`, changes `stateVersion`; discard captured but unsubmitted frames whenever the version
+   changes. For an unknown command outcome or `task_run_stale`, read the run before resuming.
+   If the previous window has no matching display update, pause automatic submissions and let the
+   user decide whether to retry; the earlier window may still be processed or discarded.
+7. After an accepted step transition, capture a new frame for the newly current step when the
+   preceding conditions for submission are satisfied. Do not reuse
+   frames from the previous step or send a frame that has aged beyond the API's 30-second limit.
+   On stop, completion, sign-out, or permission withdrawal, stop the camera and clear local queued
+   frames. Delete uploaded images through the image endpoint when no longer needed and practical.
+
+If a single frame proves insufficient for an action that changes over time, the app may submit up
+to three **distinct** frames captured in order within one window. Do not synthesize timestamps or
+repeat an image ID. Evaluate this separately because every additional frame adds upload and model
+cost. The worker's two-second queue check is an internal scheduling detail, not a recommended client
+cadence or maximum processing time.
+
+The display endpoint is a single latest-value channel, not an observation queue. There is no public
+window-status endpoint, failure callback, or cancellation of a queued window. Therefore the app
+cannot prove that the worker has finished when no matching display update appears, and this policy
+cannot guarantee zero backend backlog. Before expanding beyond a small pilot, measure capture and
+upload latency, frame freshness, observation latency and failures, battery, bandwidth, and model
+cost; coordinate cadence and queue limits with the backend owner.
+
 ## Error handling by operation
 
 The HTTP status and `error.code` are the contract. The `detail` and `error.message` fields are
