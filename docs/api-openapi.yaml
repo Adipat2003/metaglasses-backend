@@ -1,0 +1,565 @@
+openapi: 3.0.3
+info:
+  title: MetaGlasses AWS API
+  version: 1.0.0
+  description: |
+    AWS backend HTTP endpoints. Phone operations require an accepted Cognito access token;
+    display uses a pairing capability. Model outputs are not guaranteed identical across calls.
+    Stored revisions and idempotent retries return persisted results. Include x-request-id when
+    reporting application failures. API Gateway and network failures may have another format.
+servers:
+  - url: https://xay03orwv0.execute-api.us-east-1.amazonaws.com
+    description: Documented AWS endpoint; verify the environment before use.
+security:
+  - cognitoAccessToken: []
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Check API process health
+      security: []
+      responses:
+        '200':
+          description: Process responds; dependencies are not checked.
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, environment, auth]
+                properties:
+                  status: { type: string, enum: [ok] }
+                  environment: { type: string, enum: [aws, local] }
+                  auth: { type: string, enum: [required] }
+        '500': { $ref: '#/components/responses/Error' }
+  /v1/state:
+    post:
+      operationId: setPairingState
+      summary: Register or refresh a pairing and set phone state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pairingToken, state]
+              properties:
+                pairingToken: { $ref: '#/components/schemas/PairingToken' }
+                state: { type: string, enum: [idle, listening, thinking, speaking] }
+      responses:
+        '204': { description: Pairing state saved., headers: { x-request-id: { $ref: '#/components/headers/RequestId' } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/display:
+    get:
+      operationId: getDisplay
+      summary: Read the current lens display
+      description: The pairing token is the capability credential; never log or share its URL.
+      security: []
+      parameters:
+        - { name: token, in: query, required: true, schema: { $ref: '#/components/schemas/PairingToken' } }
+      responses:
+        '200':
+          description: Latest display state; response fields may be null before the first message.
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [responseId, text, state, createdAt]
+                properties:
+                  responseId: { type: string, nullable: true }
+                  text: { type: string, nullable: true }
+                  state: { type: string, enum: [idle, listening, thinking, speaking] }
+                  createdAt: { type: string, format: date-time, nullable: true }
+        '401': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/chat:
+    post:
+      operationId: createChatResponse
+      summary: Generate and publish a chat response
+      description: |
+        The client sends the conversation each time; the server does not retain history.
+        imageIds are permitted on user messages only. Serialized messages are limited to
+        256000 UTF-8 bytes. Calls are not idempotent. The optional provider is stateless;
+        provider-specific credential fields are documented in the backend README.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pairingToken, messages]
+              properties:
+                pairingToken: { $ref: '#/components/schemas/PairingToken' }
+                messages:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [role, content]
+                    properties:
+                      role: { type: string, enum: [user, assistant] }
+                      content: { type: string, minLength: 1 }
+                      imageIds: { type: array, items: { type: string, format: uuid } }
+                provider:
+                  type: object
+                  description: See the README for the provider-specific fields and accepted types.
+                  additionalProperties: true
+      responses:
+        '200':
+          description: Generated response saved and published.
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [responseId, text, createdAt]
+                properties:
+                  responseId: { type: string }
+                  text: { type: string }
+                  createdAt: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/images:
+    post:
+      operationId: uploadPairingImage
+      summary: Upload raw JPEG or PNG image bytes
+      parameters:
+        - { name: pairingToken, in: query, required: true, schema: { $ref: '#/components/schemas/PairingToken' } }
+      requestBody:
+        required: true
+        content:
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/png: { schema: { type: string, format: binary } }
+      responses:
+        '201':
+          description: Uploaded image, up to 8 MiB. Inference windows have a 2 MiB per-frame limit.
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [imageId, contentType, byteSize, createdAt]
+                properties:
+                  imageId: { type: string, format: uuid }
+                  contentType: { type: string, enum: [image/jpeg, image/png] }
+                  byteSize: { type: integer, minimum: 1, maximum: 8388608 }
+                  createdAt: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '415': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/images/{imageId}:
+    delete:
+      operationId: deletePairingImage
+      summary: Delete one image from the active pairing
+      parameters:
+        - { name: imageId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: pairingToken, in: query, required: true, schema: { $ref: '#/components/schemas/PairingToken' } }
+      responses:
+        '204': { description: Image deleted., headers: { x-request-id: { $ref: '#/components/headers/RequestId' } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/task-plans:
+    post:
+      operationId: createTaskPlan
+      summary: Create an initial plan proposal from user steps
+      description: |
+        Saves the original normalized steps as version 1, invokes the model, and saves its
+        proposal as version 2. The plan stays in draft and requires user approval before a run.
+        Reuse the same clientRequestId and identical request when retrying. A model failure
+        can leave a draft stored; retrying resumes creation. Reusing the ID with a different
+        pairing, title, or steps returns 409. Concurrent retries may both call the model,
+        but only one proposal is persisted. Model outputs can differ between attempts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pairingToken, clientRequestId, title, steps]
+              properties:
+                pairingToken: { type: string, pattern: '^[0-9a-fA-F]{32}$' }
+                clientRequestId: { type: string, format: uuid }
+                title: { type: string, minLength: 1, maxLength: 160 }
+                steps:
+                  type: array
+                  minItems: 1
+                  maxItems: 30
+                  description: Combined normalized instruction length must not exceed 16000 characters.
+                  items:
+                    type: object
+                    required: [instruction]
+                    properties:
+                      instruction: { type: string, minLength: 1, maxLength: 1000 }
+            example:
+              pairingToken: 0123456789abcdef0123456789abcdef
+              clientRequestId: 11111111-1111-4111-8111-111111111111
+              title: Make tea
+              steps:
+                - instruction: Pour the hot water into the cup.
+      responses:
+        '201': { $ref: '#/components/responses/CreatedPlan' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/task-plans/{taskPlanId}:
+    parameters: [{ $ref: '#/components/parameters/TaskPlanId' }]
+    get:
+      operationId: getTaskPlan
+      summary: Read the current plan version and review
+      responses:
+        '200': { $ref: '#/components/responses/Plan' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/task-plans/{taskPlanId}/refine:
+    parameters: [{ $ref: '#/components/parameters/TaskPlanId' }]
+    post:
+      operationId: refineTaskPlan
+      summary: Propose a revised plan version
+      description: |
+        Use the current version and a new request ID for a new edit. Reuse both the ID and
+        message for retries. Refinement invalidates the previous review. Initial creation
+        uses one revision, leaving at most nine subsequent revisions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clientRequestId, expectedVersion, message]
+              properties:
+                clientRequestId: { type: string, format: uuid }
+                expectedVersion: { type: integer, minimum: 1 }
+                message: { type: string, minLength: 1, maxLength: 2000 }
+      responses:
+        '200': { $ref: '#/components/responses/Plan' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/task-plans/{taskPlanId}/validate:
+    parameters: [{ $ref: '#/components/parameters/TaskPlanId' }]
+    post:
+      operationId: validateTaskPlan
+      summary: Review the current draft without approving it
+      description: A review is saved only if the reviewed version is still current.
+      responses:
+        '200': { $ref: '#/components/responses/Plan' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/task-plans/{taskPlanId}/approve:
+    parameters: [{ $ref: '#/components/parameters/TaskPlanId' }]
+    post:
+      operationId: approveTaskPlan
+      summary: Review and approve the current version after explicit user consent
+      description: |
+        Runs a strict review and approves only if its checks pass and the plan is unchanged.
+        On task_plan_guidelines_failed, retrieve the plan to display saved blockers and questions.
+      responses:
+        '200': { $ref: '#/components/responses/Plan' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/task-runs:
+    post:
+      operationId: startTaskRun
+      summary: Start an approved plan on its active pairing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [taskPlanId, clientRequestId]
+              properties:
+                taskPlanId: { type: string, format: uuid }
+                clientRequestId: { type: string, format: uuid }
+      responses:
+        '201': { $ref: '#/components/responses/Run' }
+        '401': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/task-runs/{taskRunId}:
+    parameters: [{ $ref: '#/components/parameters/TaskRunId' }]
+    get:
+      operationId: getTaskRun
+      summary: Read the current task-run state
+      responses:
+        '200': { $ref: '#/components/responses/Run' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/task-runs/{taskRunId}/commands:
+    parameters: [{ $ref: '#/components/parameters/TaskRunId' }]
+    post:
+      operationId: commandTaskRun
+      summary: Apply an explicit user command
+      description: Reuse the same clientRequestId for retries. On stale state, fetch the run before another user decision.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/RunRequest'
+                - type: object
+                  required: [command]
+                  properties:
+                    command: { type: string, enum: [pause, resume, repeat, confirm, skip, back, correct, stop] }
+      responses:
+        '200': { $ref: '#/components/responses/Run' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/task-runs/{taskRunId}/stop:
+    parameters: [{ $ref: '#/components/parameters/TaskRunId' }]
+    post:
+      operationId: stopTaskRun
+      summary: Stop a task run
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RunRequest' } } }
+      responses:
+        '200': { $ref: '#/components/responses/Run' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/task-runs/{taskRunId}/inference-windows:
+    parameters: [{ $ref: '#/components/parameters/TaskRunId' }]
+    post:
+      operationId: submitInferenceWindow
+      summary: Queue one to three previously uploaded frames
+      description: |
+        Images must belong to this pairing and each be at most 2 MiB. Times must be canonical
+        UTC ISO timestamps with milliseconds, in strictly increasing order, between 30 seconds
+        before and 5 seconds after server time. Sequence numbers increase per run. A 202 means
+        queued, not completed; observations do not advance the run.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clientRequestId, expectedStateVersion, sequenceNumber, frames]
+              properties:
+                clientRequestId: { type: string, format: uuid }
+                expectedStateVersion: { type: integer, minimum: 1, maximum: 9000000000000000 }
+                sequenceNumber: { type: integer, minimum: 1, maximum: 9000000000000000 }
+                frames:
+                  type: array
+                  minItems: 1
+                  maxItems: 3
+                  items:
+                    type: object
+                    required: [imageId, capturedAt]
+                    properties:
+                      imageId: { type: string, format: uuid }
+                      capturedAt: { type: string, format: date-time, example: '2026-01-01T00:00:00.000Z' }
+      responses:
+        '202':
+          description: Window accepted, possibly already processed on an idempotent retry.
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [outcome, inferenceWindowId, sequenceNumber, status, stateVersion, createdAt]
+                properties:
+                  outcome: { type: string, enum: [accepted] }
+                  inferenceWindowId: { type: string, format: uuid }
+                  sequenceNumber: { type: integer }
+                  status: { type: string }
+                  stateVersion: { type: integer }
+                  createdAt: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    cognitoAccessToken: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    TaskPlanId: { in: path, name: taskPlanId, required: true, schema: { type: string, format: uuid } }
+    TaskRunId: { in: path, name: taskRunId, required: true, schema: { type: string, format: uuid } }
+  headers:
+    RequestId:
+      description: Correlation ID for server logs.
+      schema: { type: string, format: uuid }
+  responses:
+    Run:
+      description: Run state or applied command. Fields vary by operation.
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/TaskRun' } } }
+    CreatedPlan:
+      description: Generated draft persisted.
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/TaskPlan' } } }
+    Plan:
+      description: Current plan and any stored review.
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/TaskPlan' } } }
+    Error:
+      description: |
+        Use error.code for handling, detail for display, and request_id for support. Examples
+        include task_plan_invalid, task_plan_idempotency_conflict, task_plan_changed,
+        task_plan_stale, task_plan_not_draft, task_plan_not_refinable, task_plan_revision_limit,
+        task_plan_guidelines_failed, plan_creation_invalid_response, plan_creation_unavailable,
+        plan_refinement_invalid_response, plan_refinement_unavailable,
+        plan_validation_invalid_response, plan_validation_unavailable,
+        plan_approval_review_invalid_response, and plan_approval_review_unavailable.
+        A 503 model failure may include safe model, upstream_status, failure_type, and
+        suggested_action context. Do not assume every optional field is present.
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  schemas:
+    PairingToken: { type: string, pattern: '^[0-9a-fA-F]{32}$' }
+    RunRequest:
+      type: object
+      required: [clientRequestId, expectedStateVersion]
+      properties:
+        clientRequestId: { type: string, format: uuid }
+        expectedStateVersion: { type: integer, minimum: 1, maximum: 9000000000000000 }
+    TaskRun:
+      type: object
+      required: [taskRunId, status, currentStepOrdinal, stateVersion, lensInstruction]
+      properties:
+        outcome: { type: string, enum: [applied] }
+        taskRunId: { type: string, format: uuid }
+        taskPlanId: { type: string, format: uuid }
+        planVersion: { type: integer }
+        status: { type: string, enum: [active, paused, stopped, completed] }
+        currentStepOrdinal: { type: integer }
+        currentStepStatus: { type: string }
+        stateVersion: { type: integer }
+        lensInstruction: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        stoppedAt: { type: string, format: date-time, nullable: true }
+    Error:
+      type: object
+      required: [detail, request_id, status, error]
+      properties:
+        detail: { type: string }
+        request_id: { type: string, format: uuid }
+        status: { type: integer }
+        error:
+          type: object
+          required: [type, code, message]
+          properties:
+            type: { type: string }
+            code: { type: string }
+            message: { type: string }
+            context: { type: object, additionalProperties: true }
+    SourceStep:
+      type: object
+      required: [ordinal, instruction]
+      properties:
+        ordinal: { type: integer, minimum: 1 }
+        instruction: { type: string }
+    TaskPlan:
+      type: object
+      required: [taskPlanId, title, status, currentVersion, approvedVersion, createdAt, updatedAt, sourceSteps, validationStatus, validation, revisionHistory]
+      properties:
+        taskPlanId: { type: string, format: uuid }
+        title: { type: string }
+        status: { type: string, enum: [draft, awaiting_approval, approved, abandoned] }
+        currentVersion: { type: integer, minimum: 1 }
+        approvedVersion: { type: integer, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        sourceSteps: { type: array, items: { $ref: '#/components/schemas/SourceStep' } }
+        validationStatus: { type: string, enum: [not_validated, validated, needs_clarification] }
+        validation:
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/PlanReview' }]
+        revisionHistory:
+          type: array
+          items:
+            type: object
+            required: [clientRequestId, request, summary, version]
+            properties:
+              clientRequestId: { type: string, format: uuid }
+              request: { type: string }
+              summary: { type: string }
+              version: { type: integer }
+    PlanReview:
+      type: object
+      required: [planSummary, needsUserClarification, clarificationQuestions, steps, planRisks, unsupportedClaims, guidelineChecks, approvalBlockers, approvalReady]
+      properties:
+        planSummary: { type: string }
+        needsUserClarification: { type: boolean }
+        clarificationQuestions: { type: array, items: { type: string } }
+        steps:
+          type: array
+          items:
+            type: object
+            required: [sourceStepOrdinal, canonicalInstruction, visualAcceptanceCriteria, riskLevel, requiresUserConfirmation, allowedTransitions]
+            properties:
+              sourceStepOrdinal: { type: integer }
+              canonicalInstruction: { type: string }
+              visualAcceptanceCriteria: { type: array, items: { type: string } }
+              riskLevel: { type: string, enum: [low, medium, high] }
+              requiresUserConfirmation: { type: boolean }
+              allowedTransitions: { type: array, items: { type: string, enum: [remain_in_progress, candidate_complete, blocked] } }
+        planRisks: { type: array, items: { type: string } }
+        unsupportedClaims: { type: array, items: { type: string } }
+        guidelineChecks:
+          type: object
+          required: [clarity, completeness, observability, safety]
+          properties:
+            clarity: { type: boolean }
+            completeness: { type: boolean }
+            observability: { type: boolean }
+            safety: { type: boolean }
+        approvalBlockers: { type: array, items: { type: string } }
+        approvalReady: { type: boolean }

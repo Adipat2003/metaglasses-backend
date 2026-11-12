@@ -47,15 +47,19 @@ jobs:
       - name: Check Edge Functions
         run: |
           docker run --rm --volume "$PWD:/work" --workdir /work \
-            denoland/deno:2.5.2 deno fmt --config supabase/functions/deno.json \
-            --check supabase/functions
+            denoland/deno:2.5.2 deno fmt --config backend/deno.json \
+            --check backend
           docker run --rm --volume "$PWD:/work" --workdir /work \
-            denoland/deno:2.5.2 deno check --config supabase/functions/deno.json \
-            supabase/functions/api/index.ts \
-            supabase/functions/cleanup-pairing-images/index.ts
+            denoland/deno:2.5.2 deno check --config backend/deno.json \
+            backend/api/index.ts \
+            backend/cleanup-pairing-images/index.ts
           docker run --rm --volume "$PWD:/work" --workdir /work \
-            denoland/deno:2.5.2 deno test --allow-env --config supabase/functions/deno.json \
-            supabase/functions/api/nvidia_test.ts \
-            supabase/functions/api/providers_test.ts \
-            supabase/functions/api/task_plan_test.ts
+            denoland/deno:2.5.2 deno test --allow-env --allow-read --config backend/deno.json \
+            backend/api/errors_test.ts \
+            backend/api/index_test.ts \
+            backend/api/cognito_clients_test.ts \
+            backend/api/nvidia_test.ts \
+            backend/api/providers_test.ts \
+            backend/api/task_plan_test.ts \
+            backend/api/task_plan_create_test.ts
           bash -n scripts/smoke-task-guidance-api.sh

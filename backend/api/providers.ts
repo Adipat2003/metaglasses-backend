@@ -264,36 +264,15 @@ function openAiMessages(messages: ProviderMessage[]): unknown[] {
   }));
 }
 
-function providerCode(payload: unknown): string | undefined {
-  if (typeof payload !== "object" || payload === null) return undefined;
-  const record = payload as Record<string, unknown>;
-  const nested = typeof record.error === "object" && record.error !== null
-    ? record.error as Record<string, unknown>
-    : record;
-  const code = nested.code ?? nested.type ?? nested.status;
-  if (typeof code !== "string" && typeof code !== "number") return undefined;
-  const normalized = String(code).slice(0, 120);
-  return /^[A-Za-z0-9._:-]+$/.test(normalized) ? normalized : undefined;
-}
-
 async function responseError(
   response: Response,
   provider: ExternalProviderName,
   model: string,
 ): Promise<ExternalProviderError> {
-  let code: string | undefined;
-  if (response.headers.get("content-type")?.toLowerCase().includes("application/json")) {
-    try {
-      code = providerCode(await response.json());
-    } catch {
-      // The tailored status message below remains actionable.
-    }
-  }
   const context: Record<string, string | number | boolean> = {
     provider,
     model,
     upstream_status: response.status,
-    ...(code ? { provider_error_code: code } : {}),
   };
   if (response.status === 401 || response.status === 403) {
     return new ExternalProviderError(

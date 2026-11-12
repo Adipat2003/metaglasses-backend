@@ -260,3 +260,21 @@ Deno.test("signs a Bedrock model ID containing a colon like the AWS SDK", async 
     "signature must match the AWS SDK for a model ID with a colon",
   );
 });
+
+Deno.test("provider failures do not expose untrusted provider error content", async () => {
+  const provider = parseExternalProvider({ type: "openai", apiKey: "key", model: "model" });
+  assert(provider, "provider should parse");
+  try {
+    await generateExternalResponse(provider, textMessages, () =>
+      Promise.resolve(Response.json({
+        error: { code: "private-provider-token", message: "private upstream response" },
+      }, { status: 503 })));
+    throw new Error("Expected provider failure");
+  } catch (error) {
+    assert(error instanceof ExternalProviderError, "Expected provider error");
+    const result = JSON.stringify(error.context);
+    assert(!result.includes("private-provider-token"), "Provider code leaked");
+    assert(!result.includes("private upstream response"), "Provider message leaked");
+    assert(error.context.upstream_status === 503, "Safe status missing");
+  }
+});

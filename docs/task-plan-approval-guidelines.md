@@ -75,5 +75,5 @@ Create plan
 ```
 
 The implementation prompt and deterministic checks live in
-`supabase/functions/api/task_plan.ts`. Update the prompt, this rubric, and the automated tests
+`backend/api/task_plan.ts`. Update the prompt, this rubric, and the automated tests
 together when changing approval criteria.
