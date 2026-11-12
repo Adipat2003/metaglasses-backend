@@ -15,7 +15,7 @@ def test_environment_templates_are_centralized() -> None:
         "python-local.env.example",
     ]
     assert not list(ROOT.glob(".env*.example"))
-    assert not (ROOT / "supabase" / "functions" / ".env.example").exists()
+    assert not (ROOT / "backend" / ".env.example").exists()
     assert not (ROOT / "supabase" / "oauth.env.example").exists()
 
 
@@ -47,7 +47,7 @@ def test_local_supabase_enables_google_and_apple_with_environment_credentials() 
 
 def test_api_uses_cognito_authentication_and_permissive_cors() -> None:
     config = tomllib.loads((ROOT / "supabase" / "config.toml").read_text(encoding="utf-8"))
-    source = (ROOT / "supabase" / "functions" / "api" / "index.ts").read_text(
+    source = (ROOT / "backend" / "api" / "index.ts").read_text(
         encoding="utf-8"
     )
 
@@ -64,7 +64,7 @@ def test_api_uses_cognito_authentication_and_permissive_cors() -> None:
 
 
 def test_edge_api_supports_stateless_byok_without_system_injection() -> None:
-    api_directory = ROOT / "supabase" / "functions" / "api"
+    api_directory = ROOT / "backend" / "api"
     source = (api_directory / "index.ts").read_text(encoding="utf-8")
     providers = (api_directory / "providers.ts").read_text(encoding="utf-8")
 
@@ -102,7 +102,7 @@ def test_edge_api_database_functions_are_service_role_only() -> None:
 
 
 def test_hosted_edge_api_does_not_limit_images_per_pairing() -> None:
-    source = (ROOT / "supabase" / "functions" / "api" / "index.ts").read_text(
+    source = (ROOT / "backend" / "api" / "index.ts").read_text(
         encoding="utf-8"
     )
     migration = (
@@ -135,7 +135,7 @@ def test_cd_deploys_to_ec2_through_oidc_and_ssm() -> None:
 
 
 def test_aurora_migration_is_marked_after_its_first_successful_run() -> None:
-    migration = (ROOT / "supabase" / "functions" / "migrate.ts").read_text(encoding="utf-8")
+    migration = (ROOT / "backend" / "migrate.ts").read_text(encoding="utf-8")
 
     assert "app.schema_migrations" in migration
     assert "database_migration_skipped" in migration
@@ -260,11 +260,11 @@ def test_aws_api_gateway_foundation_keeps_compute_private() -> None:
 
 
 def test_aws_runtime_uses_a_timeout_inside_api_gateway_limit() -> None:
-    api_source = (ROOT / "supabase" / "functions" / "api" / "index.ts").read_text(
+    api_source = (ROOT / "backend" / "api" / "index.ts").read_text(
         encoding="utf-8"
     )
     provider_source = (
-        ROOT / "supabase" / "functions" / "api" / "providers.ts"
+        ROOT / "backend" / "api" / "providers.ts"
     ).read_text(encoding="utf-8")
 
     assert 'Deno.env.get("APP_ENV") === "aws" ? 20_000' in api_source
@@ -272,11 +272,11 @@ def test_aws_runtime_uses_a_timeout_inside_api_gateway_limit() -> None:
 
 
 def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() -> None:
-    api_source = (ROOT / "supabase" / "functions" / "api" / "index.ts").read_text(
+    api_source = (ROOT / "backend" / "api" / "index.ts").read_text(
         encoding="utf-8"
     )
     validator_source = (
-        ROOT / "supabase" / "functions" / "api" / "task_plan.ts"
+        ROOT / "backend" / "api" / "task_plan.ts"
     ).read_text(encoding="utf-8")
     migration = (ROOT / "database" / "migrations" / "0002_task_plans.sql").read_text(
         encoding="utf-8"
@@ -357,8 +357,8 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     )
     assert "grant execute on function app.approve_task_plan_with_review" in approval_migration
     assert "DATABASE_MIGRATOR_USER=metaglasses_migrator" in template
-    assert "supabase/functions/migrate.ts" in workflow
-    assert "supabase/functions/api/task_plan_test.ts" in ci_workflow
+    assert "backend/migrate.ts" in workflow
+    assert "backend/api/task_plan_test.ts" in ci_workflow
     assert "bash -n scripts/smoke-task-guidance-api.sh" in ci_workflow
 
 

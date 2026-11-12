@@ -1,8 +1,8 @@
 # AWS deployment and operations
 
-MetaGlasses currently uses one AWS environment in `us-east-1`. No application data was migrated
-from Supabase: the RDS PostgreSQL database starts empty and the AWS Cognito user pool starts with
-no users.
+MetaGlasses uses one AWS environment in `us-east-1`. AWS database and Cognito resources were
+created without migrating application data from the previous provider. Check current state directly
+in AWS; initial conditions do not describe current data or user counts.
 
 ## Architecture
 

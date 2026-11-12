@@ -1,3 +1,4 @@
+import { ApiError, errorResponse } from "./errors.ts";
 import {
   createPlanWithModel,
   initialPlanRequest,
@@ -84,34 +85,6 @@ interface ModelImageReference {
   url: string;
 }
 
-function defaultErrorCode(status: number): string {
-  const codes: Record<number, string> = {
-    400: "bad_request",
-    401: "unauthorized",
-    403: "forbidden",
-    404: "not_found",
-    413: "payload_too_large",
-    415: "unsupported_media_type",
-    422: "validation_error",
-    429: "rate_limited",
-    503: "service_unavailable",
-  };
-  return codes[status] ?? (status >= 500 ? "internal_error" : "request_failed");
-}
-
-class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-    readonly authenticate = false,
-    readonly code = defaultErrorCode(status),
-    readonly context: Record<string, string | number | boolean> = {},
-  ) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
-
 interface RequestLog {
   event: "api_request_completed";
   service: "api";
@@ -151,26 +124,17 @@ function normalizedRoute(path: string): string {
   if (/^\/v1\/task-runs\/[^/]+\/inference-windows$/.test(path)) {
     return "/v1/task-runs/:taskRunId/inference-windows";
   }
-  return path;
-}
-
-function redactedErrorText(value: string): string {
-  return value
-    .replace(/Bearer\s+\S+/gi, "Bearer <redacted>")
-    .replace(
-      /([?&](?:apikey|key|pairingToken|signature|token)=)[^&\s]+/gi,
-      "$1<redacted>",
-    )
-    .replace(/\bsb_(?:publishable|secret)_[A-Za-z0-9._-]+/g, "<redacted-key>")
-    .replace(/\bsk-(?:ant-)?[A-Za-z0-9_-]{12,}/g, "<redacted-key>")
-    .replace(/\bAIza[A-Za-z0-9_-]{20,}/g, "<redacted-key>")
-    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "<redacted-key>")
-    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "<redacted-jwt>");
-}
-
-function compactStack(error: Error): string | undefined {
-  if (!error.stack) return undefined;
-  return redactedErrorText(error.stack).split("\n").slice(0, 8).join("\n").slice(0, 4_000);
+  return new Set([
+      "/healthz",
+      "/v1/state",
+      "/v1/display",
+      "/v1/chat",
+      "/v1/images",
+      "/v1/task-plans",
+      "/v1/task-runs",
+    ]).has(path)
+    ? path
+    : "unmatched";
 }
 
 function requestLog(
@@ -201,10 +165,9 @@ function requestLog(
     };
   } else if (error instanceof Error) {
     entry.error = {
-      type: error.name,
+      type: /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(error.name) ? error.name : "Error",
       code: "unhandled_error",
-      message: redactedErrorText(error.message).slice(0, 1_000),
-      stack: compactStack(error),
+      message: "Unexpected request failure.",
     };
   } else if (error !== undefined) {
     entry.error = {
@@ -234,33 +197,10 @@ function responseWithRequestId(response: Response, requestId: string): Response 
   });
 }
 
-async function providerFailureContext(
+function providerFailureContext(
   response: Response,
-): Promise<Record<string, string | number | boolean>> {
-  const context: Record<string, string | number | boolean> = {
-    upstream_status: response.status,
-  };
-  if (!response.headers.get("content-type")?.toLowerCase().includes("application/json")) {
-    return context;
-  }
-
-  try {
-    const payload = await response.json() as Record<string, unknown>;
-    const error = typeof payload.error === "object" && payload.error !== null
-      ? payload.error as Record<string, unknown>
-      : payload;
-    const code = error.code;
-    const message = error.message ?? error.detail;
-    if (typeof code === "string" || typeof code === "number") {
-      context.provider_error_code = redactedErrorText(String(code)).slice(0, 200);
-    }
-    if (typeof message === "string") {
-      context.provider_error_message = redactedErrorText(message).slice(0, 500);
-    }
-  } catch {
-    // The upstream status remains useful when the provider error body is malformed.
-  }
-  return context;
+): Record<string, string | number | boolean> {
+  return { upstream_status: response.status };
 }
 
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -272,52 +212,6 @@ function jsonResponse(payload: unknown, status = 200): Response {
 
 function emptyResponse(status: number): Response {
   return new Response(null, { status, headers: corsHeaders });
-}
-
-function clientErrorContext(
-  context: Record<string, string | number | boolean>,
-): Record<string, string | number | boolean> {
-  const allowedKeys = new Set([
-    "failure_type",
-    "provider_error_code",
-    "provider_error_message",
-    "upstream_status",
-    "provider",
-    "model",
-    "suggested_action",
-    "maximum_inline_image_bytes",
-    "prior_upstream_statuses",
-    "state_version",
-  ]);
-  return Object.fromEntries(
-    Object.entries(context).filter(([key]) => allowedKeys.has(key)),
-  );
-}
-
-function errorResponse(error: ApiError, requestId: string): Response {
-  const headers = {
-    ...corsHeaders,
-    "Content-Type": "application/json",
-    ...(error.authenticate ? { "WWW-Authenticate": "Bearer" } : {}),
-  };
-  const context = clientErrorContext(error.context);
-  return new Response(
-    JSON.stringify({
-      detail: error.message,
-      request_id: requestId,
-      status: error.status,
-      error: {
-        type: error.name,
-        code: error.code,
-        message: error.message,
-        ...(Object.keys(context).length > 0 ? { context } : {}),
-      },
-    }),
-    {
-      status: error.status,
-      headers,
-    },
-  );
 }
 
 function requiredEnvironment(name: string): string {
@@ -342,7 +236,7 @@ function awsRegion(): string {
 
 const s3 = new S3Client({ region: awsRegion() });
 const secrets = new SecretsManagerClient({ region: awsRegion() });
-const verifier = CognitoJwtVerifier.create({
+export const verifier = CognitoJwtVerifier.create({
   userPoolId: requiredEnvironment("COGNITO_USER_POOL_ID"),
   clientId: configuredCognitoClientIds(
     requiredEnvironment("COGNITO_APP_CLIENT_ID"),
@@ -520,7 +414,7 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
     }
   } catch (error) {
     if (error instanceof ApiError) throw error;
-    throw new ApiError(503, "Pairing storage unavailable.", false, "pairing_rpc_failed", {
+    throw new ApiError(503, "Backend storage unavailable.", false, "pairing_rpc_failed", {
       operation: name,
     });
   }
@@ -569,11 +463,7 @@ function jwtVerificationFailureContext(error: unknown): Record<string, string> {
   const errorType = error instanceof Error ? error.name : "UnknownError";
   const context: Record<string, string> = {
     auth_failure_type: jwtVerificationErrorTypes.has(errorType) ? errorType : "unknown",
-    auth_failure_name: errorType.slice(0, 200),
   };
-  if (error instanceof Error && error.message) {
-    context.auth_failure_message = redactedErrorText(error.message).slice(0, 500);
-  }
   return context;
 }
 
@@ -874,7 +764,7 @@ async function generateResponse(
     );
   }
   if (response.status === 429) {
-    const context = await providerFailureContext(response);
+    const context = providerFailureContext(response);
     throw new ApiError(
       429,
       "NVIDIA rate-limited the request. Retry later.",
@@ -889,7 +779,7 @@ async function generateResponse(
     );
   }
   if (!response.ok) {
-    const context = await providerFailureContext(response);
+    const context = providerFailureContext(response);
     context.provider = "nvidia";
     context.model = providerModel;
     context.suggested_action = response.status === 401 || response.status === 403
@@ -1381,13 +1271,20 @@ async function observeTaskInferenceWindow(claim: TaskInferenceClaim): Promise<Ta
     signal: AbortSignal.timeout(8_000),
   });
   if (!response.ok) {
-    const detail = redactedErrorText(await response.text().catch(() => "")).slice(0, 300);
-    throw new Error(`Nova returned HTTP ${response.status}. ${detail}`.trim());
+    throw new TaskPlanProviderError(response.status);
   }
   return validateTaskObservation(
     parseModelJson(taskObservationText(await response.json())),
     bytes.length,
   );
+}
+
+export function logInference(level: "info" | "error", entry: Record<string, unknown>): void {
+  try {
+    console[level](JSON.stringify(entry));
+  } catch {
+    // Logging must not change the job outcome.
+  }
 }
 
 async function processTaskInferenceWindow(): Promise<void> {
@@ -1398,13 +1295,13 @@ async function processTaskInferenceWindow(): Promise<void> {
     const claims = await rpc<TaskInferenceClaim[]>("edge_api_claim_task_inference_window", {});
     claim = claims[0];
     if (!claim) return;
-    console.info(JSON.stringify({
+    logInference("info", {
       event: "task_inference_started",
       request_id: claim.inference_window_id,
       task_run_id: claim.task_run_id,
       inference_window_id: claim.inference_window_id,
       model: taskObservationModelId,
-    }));
+    });
     const observation = await observeTaskInferenceWindow(claim);
     const outcome = await rpc<string>("edge_api_complete_task_inference_window", {
       p_observation_id: crypto.randomUUID(),
@@ -1413,29 +1310,35 @@ async function processTaskInferenceWindow(): Promise<void> {
       p_model_id: taskObservationModelId,
       p_observation: observation,
     });
-    console.info(JSON.stringify({
+    logInference("info", {
       event: "task_inference_completed",
       request_id: claim.inference_window_id,
       task_run_id: claim.task_run_id,
       inference_window_id: claim.inference_window_id,
       model: taskObservationModelId,
       outcome,
-    }));
+    });
   } catch (error) {
     if (claim) {
       await rpc<boolean>("edge_api_reject_task_inference_window", {
         p_inference_window_id: claim.inference_window_id,
         p_owner_id: claim.owner_id,
-      }).catch(() => undefined);
+      }).catch(() => {
+        logInference("error", {
+          event: "task_inference_rejection_failed",
+          request_id: claim?.inference_window_id,
+          error_code: "task_inference_rejection_failed",
+        });
+      });
     }
-    console.error(JSON.stringify({
+    logInference("error", {
       event: "task_inference_failed",
       request_id: claim?.inference_window_id,
       inference_window_id: claim?.inference_window_id,
       model: taskObservationModelId,
       failure_type: error instanceof Error ? error.name : "UnknownError",
-      failure_message: error instanceof Error ? redactedErrorText(error.message).slice(0, 500) : "",
-    }));
+      ...(error instanceof TaskPlanProviderError ? { upstream_status: error.upstreamStatus } : {}),
+    });
   } finally {
     inferenceWorkerRunning = false;
   }
@@ -2146,7 +2049,7 @@ if (Deno.env.get("APP_ENV") === "aws") {
   setInterval(() => void processTaskInferenceWindow(), 2_000);
 }
 
-Deno.serve(async (request: Request) => {
+export async function handleApiRequest(request: Request): Promise<Response> {
   const startedAt = performance.now();
   const requestId = crypto.randomUUID();
   let path = "/";
@@ -2235,9 +2138,7 @@ Deno.serve(async (request: Request) => {
     }
   } catch (error) {
     requestError = error;
-    response = error instanceof ApiError
-      ? errorResponse(error, requestId)
-      : errorResponse(new ApiError(500, "Internal server error."), requestId);
+    response = errorResponse(error, requestId, corsHeaders);
   }
 
   try {
@@ -2246,4 +2147,6 @@ Deno.serve(async (request: Request) => {
     // Logging must not change the response.
   }
   return response.status === 101 ? response : responseWithRequestId(response, requestId);
-});
+}
+
+if (import.meta.main) Deno.serve(handleApiRequest);

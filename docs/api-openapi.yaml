@@ -1,19 +1,185 @@
 openapi: 3.0.3
 info:
-  title: MetaGlasses task-guidance API
+  title: MetaGlasses AWS API
   version: 1.0.0
   description: |
-    Task-plan and task-run endpoints for the AWS backend. This specification covers guidance only;
-    see the canonical Postman collection for the other API routes. An accepted Cognito
-    access token and an active pairing owned by that user are required. Model outputs are
-    not guaranteed to be identical across calls. Stored revisions and idempotent retries
-    return persisted results. Include x-request-id when reporting a failure.
+    AWS backend HTTP endpoints. Phone operations require an accepted Cognito access token;
+    display uses a pairing capability. Model outputs are not guaranteed identical across calls.
+    Stored revisions and idempotent retries return persisted results. Include x-request-id when
+    reporting application failures. API Gateway and network failures may have another format.
 servers:
   - url: https://xay03orwv0.execute-api.us-east-1.amazonaws.com
     description: Documented AWS endpoint; verify the environment before use.
 security:
   - cognitoAccessToken: []
 paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Check API process health
+      security: []
+      responses:
+        '200':
+          description: Process responds; dependencies are not checked.
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, environment, auth]
+                properties:
+                  status: { type: string, enum: [ok] }
+                  environment: { type: string, enum: [aws, local] }
+                  auth: { type: string, enum: [required] }
+        '500': { $ref: '#/components/responses/Error' }
+  /v1/state:
+    post:
+      operationId: setPairingState
+      summary: Register or refresh a pairing and set phone state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pairingToken, state]
+              properties:
+                pairingToken: { $ref: '#/components/schemas/PairingToken' }
+                state: { type: string, enum: [idle, listening, thinking, speaking] }
+      responses:
+        '204': { description: Pairing state saved., headers: { x-request-id: { $ref: '#/components/headers/RequestId' } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/display:
+    get:
+      operationId: getDisplay
+      summary: Read the current lens display
+      description: The pairing token is the capability credential; never log or share its URL.
+      security: []
+      parameters:
+        - { name: token, in: query, required: true, schema: { $ref: '#/components/schemas/PairingToken' } }
+      responses:
+        '200':
+          description: Latest display state; response fields may be null before the first message.
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [responseId, text, state, createdAt]
+                properties:
+                  responseId: { type: string, nullable: true }
+                  text: { type: string, nullable: true }
+                  state: { type: string, enum: [idle, listening, thinking, speaking] }
+                  createdAt: { type: string, format: date-time, nullable: true }
+        '401': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/chat:
+    post:
+      operationId: createChatResponse
+      summary: Generate and publish a chat response
+      description: |
+        The client sends the conversation each time; the server does not retain history.
+        imageIds are permitted on user messages only. Serialized messages are limited to
+        256000 UTF-8 bytes. Calls are not idempotent. The optional provider is stateless;
+        provider-specific credential fields are documented in the backend README.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pairingToken, messages]
+              properties:
+                pairingToken: { $ref: '#/components/schemas/PairingToken' }
+                messages:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [role, content]
+                    properties:
+                      role: { type: string, enum: [user, assistant] }
+                      content: { type: string, minLength: 1 }
+                      imageIds: { type: array, items: { type: string, format: uuid } }
+                provider:
+                  type: object
+                  description: See the README for the provider-specific fields and accepted types.
+                  additionalProperties: true
+      responses:
+        '200':
+          description: Generated response saved and published.
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [responseId, text, createdAt]
+                properties:
+                  responseId: { type: string }
+                  text: { type: string }
+                  createdAt: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/images:
+    post:
+      operationId: uploadPairingImage
+      summary: Upload raw JPEG or PNG image bytes
+      parameters:
+        - { name: pairingToken, in: query, required: true, schema: { $ref: '#/components/schemas/PairingToken' } }
+      requestBody:
+        required: true
+        content:
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/png: { schema: { type: string, format: binary } }
+      responses:
+        '201':
+          description: Uploaded image, up to 8 MiB. Inference windows have a 2 MiB per-frame limit.
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [imageId, contentType, byteSize, createdAt]
+                properties:
+                  imageId: { type: string, format: uuid }
+                  contentType: { type: string, enum: [image/jpeg, image/png] }
+                  byteSize: { type: integer, minimum: 1, maximum: 8388608 }
+                  createdAt: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '415': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /v1/images/{imageId}:
+    delete:
+      operationId: deletePairingImage
+      summary: Delete one image from the active pairing
+      parameters:
+        - { name: imageId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: pairingToken, in: query, required: true, schema: { $ref: '#/components/schemas/PairingToken' } }
+      responses:
+        '204': { description: Image deleted., headers: { x-request-id: { $ref: '#/components/headers/RequestId' } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /v1/task-plans:
     post:
       operationId: createTaskPlan
@@ -296,6 +462,7 @@ components:
       headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
   schemas:
+    PairingToken: { type: string, pattern: '^[0-9a-fA-F]{32}$' }
     RunRequest:
       type: object
       required: [clientRequestId, expectedStateVersion]
