@@ -1491,6 +1491,7 @@ async function handleTaskPlanCreate(request: Request, requestId: string): Promis
                 [],
                 initialPlanRequest,
                 null,
+                true,
               ),
           );
         } catch (error) {

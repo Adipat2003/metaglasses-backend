@@ -188,6 +188,51 @@ Deno.test("sends current plan, conversation history, and feedback to the refiner
     assert(
       (requestBody?.system as Array<{ text: string }>)[0].text.includes("untrusted user data"),
     );
+    const format = (requestBody?.outputConfig as {
+      textFormat: { type: string; structure: { jsonSchema: { schema: string } } };
+    }).textFormat;
+    assert(format.type === "json_schema");
+    const schema = JSON.parse(format.structure.jsonSchema.schema);
+    assert(schema.properties.steps.items.required.includes("acceptanceCriteria"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("initial generation rejects changed or missing actions", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (
+      const steps of [
+        [
+          detailedStep("Replace the requested action."),
+          detailedStep(sourcePlan.steps[1].instruction),
+        ],
+        [detailedStep(sourcePlan.steps[0].instruction)],
+      ]
+    ) {
+      globalThis.fetch = async () =>
+        Response.json({
+          output: {
+            message: { content: [{ text: JSON.stringify({ changeSummary: "Updated", steps }) }] },
+          },
+        });
+      try {
+        await refineTaskPlanWithModel(
+          "us-east-1",
+          { accessKeyId: "test-key", secretAccessKey: "test-secret" },
+          sourcePlan,
+          [],
+          "Create a plan.",
+          null,
+          true,
+        );
+        throw new Error("Expected source mapping failure.");
+      } catch (error) {
+        if (!(error instanceof TaskPlanValidationError)) throw error;
+        assert(error.reason === "source_mapping_mismatch");
+      }
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -311,6 +356,52 @@ Deno.test("review rejects a model response that changes step order", async () =>
   } catch (error) {
     if (!(error instanceof TaskPlanValidationError)) throw error;
     assert(error.reason === "source_mapping_mismatch");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("review conservatively resolves inconsistent clarification fields", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (
+      const [flag, questions] of [[false, ["What quantity?"]], [true, []]] as Array<
+        [boolean, string[]]
+      >
+    ) {
+      const review = validModelPlan();
+      review.needsUserClarification = flag;
+      review.clarificationQuestions = questions;
+      globalThis.fetch = async () =>
+        Response.json({ output: { message: { content: [{ text: JSON.stringify(review) }] } } });
+      const result = await reviewTaskPlanForApprovalWithModel("us-east-1", {
+        accessKeyId: "test-key",
+        secretAccessKey: "test-secret",
+      }, sourcePlan);
+      assert(result.needsUserClarification);
+      assert(result.clarificationQuestions.length > 0);
+      assert(!result.approvalReady);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("extra model review steps cannot enter the plan or pass approval", async () => {
+  const originalFetch = globalThis.fetch;
+  const review = validModelPlan();
+  (review.steps as Array<Record<string, unknown>>).push({ sourceStepOrdinal: 3 });
+  globalThis.fetch = async () =>
+    Response.json({ output: { message: { content: [{ text: JSON.stringify(review) }] } } });
+  try {
+    const result = await reviewTaskPlanForApprovalWithModel("us-east-1", {
+      accessKeyId: "test-key",
+      secretAccessKey: "test-secret",
+    }, sourcePlan);
+    assert(result.steps.length === sourcePlan.steps.length);
+    assert(!result.approvalReady);
+    assert(!result.guidelineChecks.completeness);
+    assert(result.approvalBlockers.some((value) => value.includes("additional steps")));
   } finally {
     globalThis.fetch = originalFetch;
   }
