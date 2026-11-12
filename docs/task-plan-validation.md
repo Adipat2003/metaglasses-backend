@@ -9,7 +9,7 @@ the review rubric.
 
 ## Plan lifecycle
 
-1. An authenticated user with an active pairing creates a plan with an ordered list of steps. The
+1. An authenticated user creates a plan with an ordered list of steps, without needing a pairing. The
    submitted normalized steps are saved as version 1; GLM generates a proposed version 2. The
    response includes the proposed steps and revision summary. The user must review the proposal.
 2. If generation fails, the original draft remains. Retry the same request with the same
@@ -22,7 +22,9 @@ the review rubric.
    runs a separate strict review of the current version. Backend checks enforce the review result,
    and only an explicit user action should call approval.
 5. If approval fails, the user reads the saved blockers, refines the plan, and retries. A successful
-   approval permits the user to start a run on the active pairing.
+   approval makes the plan available to all signed-in users. Any user can start their own run on
+   their active device pairing. Unapproved plans expire two hours after creation; edits do not
+   extend the deadline. The AWS API periodically deletes expired plans in bounded batches.
 
 GLM 4.7 Flash (`zai.glm-4.7-flash`) handles generation, refinement, validation, and strict approval
 review. The backend checks the model's structured output and controls persistence and approval.
@@ -58,6 +60,10 @@ not completed. The AWS process claims windows and uses `us.amazon.nova-lite-v1:0
 observations. The code may publish a confirmation or camera-correction prompt to the lens; the
 observation cannot advance, confirm, skip, or stop a run. User commands own those transitions.
 Stale results cannot update the current display.
+
+The observation endpoint accepts images only. Microphone capture, speech recognition, and speech
+output are client responsibilities. Recognized text can be sent to chat independently, but chat
+and task guidance write to the same display and chat does not change the task-run state.
 
 The current API does not implement initial free-form plan generation, native video ingestion,
 automatic step confirmation, a separate Nova 2 verification path, or an observation retrieval

@@ -44,6 +44,7 @@ docker run --rm --volume "$PWD:/work" --workdir /work \
   backend/api/providers_test.ts backend/api/task_plan_test.ts \
   backend/api/task_plan_create_test.ts
 bash -n scripts/smoke-task-guidance-api.sh
+bash scripts/test-task-plan-library-db.sh
 ```
 
 The Docker image builds with `docker build -t metaglasses-api .`. Building does not verify AWS

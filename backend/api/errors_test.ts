@@ -12,6 +12,7 @@ Deno.test("every supported failure uses the same envelope and request ID", async
       [403, "forbidden"],
       [404, "not_found"],
       [409, "conflict"],
+      [410, "gone"],
       [413, "payload_too_large"],
       [415, "unsupported_media_type"],
       [422, "validation_error"],

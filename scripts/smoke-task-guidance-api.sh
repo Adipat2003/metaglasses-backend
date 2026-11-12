@@ -73,7 +73,7 @@ expect_status "$state_code" 204 "$smoke_dir/state.json"
 
 plan_request_id=$(uuid)
 plan_code=$(json_request POST /v1/task-plans \
-  "{\"pairingToken\":\"$PAIRING_TOKEN\",\"clientRequestId\":\"$plan_request_id\",\"title\":\"Place a cup on a table\",\"steps\":[{\"instruction\":\"Place the cup on the table.\"}]}" \
+  "{\"clientRequestId\":\"$plan_request_id\",\"title\":\"Place a cup on a table\",\"steps\":[{\"instruction\":\"Place the cup on the table.\"}]}" \
   "$smoke_dir/plan.json")
 expect_status "$plan_code" 201 "$smoke_dir/plan.json"
 task_plan_id=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).taskPlanId)' \
@@ -97,7 +97,7 @@ node -e '
 
 run_request_id=$(uuid)
 run_code=$(json_request POST /v1/task-runs \
-  "{\"taskPlanId\":\"$task_plan_id\",\"clientRequestId\":\"$run_request_id\"}" \
+  "{\"taskPlanId\":\"$task_plan_id\",\"clientRequestId\":\"$run_request_id\",\"pairingToken\":\"$PAIRING_TOKEN\"}" \
   "$smoke_dir/run.json")
 expect_status "$run_code" 201 "$smoke_dir/run.json"
 task_run_id=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).taskRunId)' \
