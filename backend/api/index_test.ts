@@ -9,7 +9,8 @@ const environment: Record<string, string> = {
   PAIRING_IMAGE_BUCKET: "test-bucket",
 };
 for (const [key, value] of Object.entries(environment)) Deno.env.set(key, value);
-const { handleApiRequest, logInference, verifier } = await import("./index.ts");
+const { handleApiRequest, logInference, verifier, taskPlanListQuery, runTaskPlanCleanup } =
+  await import("./index.ts");
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -37,6 +38,7 @@ Deno.test("all phone routes reject missing authentication with the shared envelo
     ["POST", "/v1/images"],
     ["DELETE", `/v1/images/${id}`],
     ["POST", "/v1/task-plans"],
+    ["GET", "/v1/task-plans"],
     ["GET", `/v1/task-plans/${id}`],
     ["POST", `/v1/task-plans/${id}/validate`],
     ["POST", `/v1/task-plans/${id}/refine`],
@@ -214,6 +216,17 @@ Deno.test("authenticated validation failures use the shared envelope before depe
     [
       "POST",
       "/v1/task-plans",
+      JSON.stringify({ clientRequestId: id, title: "Test", steps: [] }),
+      422,
+      "task_plan_invalid",
+    ],
+    ["GET", "/v1/task-plans?status=unknown", "", 422, "validation_error"],
+    ["GET", "/v1/task-plans?limit=101", "", 422, "validation_error"],
+    ["GET", "/v1/task-plans?offset=-1", "", 422, "validation_error"],
+    ["GET", "/v1/task-plans?status=approved&status=draft", "", 422, "validation_error"],
+    [
+      "POST",
+      "/v1/task-plans",
       JSON.stringify({
         pairingToken: "a".repeat(32),
         clientRequestId: id,
@@ -224,6 +237,13 @@ Deno.test("authenticated validation failures use the shared envelope before depe
       "task_plan_invalid",
     ],
     ["POST", "/v1/task-runs", "{}", 422, "validation_error"],
+    [
+      "POST",
+      "/v1/task-runs",
+      JSON.stringify({ taskPlanId: id, clientRequestId: id, pairingToken: "bad" }),
+      422,
+      "validation_error",
+    ],
     ["POST", `/v1/task-plans/${id}/refine`, "{}", 422, "validation_error"],
     ["POST", `/v1/task-runs/${id}/commands`, "{}", 422, "validation_error"],
     [
@@ -245,6 +265,59 @@ Deno.test("authenticated validation failures use the shared envelope before depe
       }),
     );
     await assertEnvelope(response, status, code);
+  }
+});
+
+Deno.test("plan list parameters have bounded deterministic defaults", () => {
+  const defaults = taskPlanListQuery(new URL("http://localhost/v1/task-plans"));
+  assert(
+    defaults.status === null && defaults.limit === 50 && defaults.offset === 0,
+    "Invalid defaults",
+  );
+  const approved = taskPlanListQuery(
+    new URL("http://localhost/v1/task-plans?status=approved&limit=10&offset=20"),
+  );
+  assert(
+    approved.status === "approved" && approved.limit === 10 && approved.offset === 20,
+    "Invalid page",
+  );
+});
+
+Deno.test("plan cleanup logs safe outcomes and prevents overlapping work", async () => {
+  const originalInfo = console.info;
+  const originalError = console.error;
+  const logs: string[] = [];
+  console.info = (...args) => logs.push(args.join(" "));
+  console.error = (...args) => logs.push(args.join(" "));
+  try {
+    await runTaskPlanCleanup(() => Promise.resolve(2));
+    await runTaskPlanCleanup(() => Promise.reject(new Error("private database details")));
+    assert(
+      logs.length === 2 && !logs.join().includes("private database details"),
+      "Unsafe cleanup logging",
+    );
+    assert(
+      JSON.parse(logs[0]).deleted === 2 &&
+        JSON.parse(logs[1]).error_code === "task_plan_cleanup_failed",
+      "Missing cleanup outcome",
+    );
+    let release!: () => void;
+    let called = false;
+    const pending = runTaskPlanCleanup(() =>
+      new Promise<number>((resolve) => {
+        release = () => resolve(0);
+      })
+    );
+    await runTaskPlanCleanup(() => {
+      called = true;
+      return Promise.resolve(0);
+    });
+    release();
+    await pending;
+    assert(!called, "Cleanup must not overlap itself");
+  } finally {
+    console.info = originalInfo;
+    console.error = originalError;
   }
 });
 

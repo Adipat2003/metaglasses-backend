@@ -113,6 +113,7 @@ an API error envelope, so handle it separately and retain the logical request ID
 | `POST /v1/images?pairingToken=...` | User | 201 | Upload one image |
 | `DELETE /v1/images/{imageId}?pairingToken=...` | User | 204 | Delete an image |
 | `POST /v1/task-plans` | User | 201 | Create a structured plan |
+| `GET /v1/task-plans` | User | 200 | List shared approved plans and the user's own plans |
 | `GET /v1/task-plans/{taskPlanId}` | User | 200 | Read current plan and review |
 | `POST /v1/task-plans/{taskPlanId}/refine` | User | 200 | Propose a new version |
 | `POST /v1/task-plans/{taskPlanId}/validate` | User | 200 | Optional preview review |
@@ -123,7 +124,7 @@ an API error envelope, so handle it separately and retain the logical request ID
 | `POST /v1/task-runs/{taskRunId}/stop` | User | 200 | Stop a run |
 | `POST /v1/task-runs/{taskRunId}/inference-windows` | User | 202 | Queue visual observation |
 
-There are no list, delete-plan, conversation-history, image-download, native video, push-display, or account-management routes in this router. Do not infer endpoints from the database or design documents.
+There are no delete-plan, conversation-history, image-download, native video, push-display, or account-management routes in this router. Do not infer endpoints from the database or design documents.
 
 ## Pairing and display
 
@@ -192,7 +193,32 @@ A request may include `provider`, for example `{"type":"openai","apiKey":"<USER_
 
 ## Task plans: create, review, refine, approve
 
-Task plans require a currently active pairing owned by the authenticated user. Keep the returned IDs and versions. UUID request IDs identify a logical operation: reuse the same ID and same payload for a retry after an uncertain result, and generate a new ID for a new operation. Do not change payloads under a reused ID.
+Plans are separate from device pairings. Any signed-in user can discover, read, and use approved plans. Drafts and plans awaiting approval are visible only to their creator. Approval makes the plan's title, steps, and review available to all signed-in users; the creator's revision history is private. A device pairing is needed only when starting a guided run. Keep the returned IDs and versions. UUID request IDs identify a logical operation: reuse the same ID and same payload for a retry after an uncertain result, and generate a new ID for a new operation. Do not change payloads under a reused ID.
+
+Unapproved plans expire **two hours after `createdAt`**, including time spent refining them. Editing does not extend the deadline. Show the returned `expiresAt` and warn the user before it arrives. Once expired, an unapproved plan is unavailable even if background cleanup has not yet removed its database row. Cleanup runs in batches while the AWS API process is running; approved plans have `expiresAt: null` and are not deleted by this cleanup. `410 task_plan_expired` can occur when retrying a recently expired creation; create a new plan with a new request ID. Once the old row is deleted, the server no longer retains that request ID, so do not retry it as an old operation.
+
+### Browse and select plans
+
+Send `GET /v1/task-plans?status=approved&limit=50&offset=0` with the Cognito access token to browse all shared approved plans. Omit `status` to include the user's own unexpired drafts and awaiting-approval plans alongside shared approved plans. Supported statuses are `draft`, `awaiting_approval`, `approved`, and `abandoned`. A status filter never exposes another user's unapproved plan. The default page size is 50, the maximum is 100, and `offset` defaults to 0. Invalid, repeated, or unknown query parameters return 422.
+
+```json
+{
+  "items": [{
+    "taskPlanId":"11111111-1111-4111-8111-111111111111",
+    "title":"Place a cup on a table",
+    "status":"approved",
+    "isOwner":false,
+    "currentVersion":2,
+    "approvedVersion":2,
+    "createdAt":"2026-01-01T12:00:00.000Z",
+    "updatedAt":"2026-01-01T12:05:00.000Z",
+    "expiresAt":null
+  }],
+  "nextOffset":null
+}
+```
+
+`isOwner` lets the app identify the user's own plans without exposing another user's identity. If `nextOffset` is a number, request the next page with the same status and limit and that offset. Results are ordered by creation time descending, then plan ID descending. Because this is offset pagination, new or newly approved plans can shift later pages; refresh from offset 0 and deduplicate by `taskPlanId`. To select an item, call `GET /v1/task-plans/<TASK_PLAN_UUID>` for its full steps, review it, and start a run with the user's active `pairingToken`. Do not send a start request for an unapproved plan.
 
 ### Create
 
@@ -200,14 +226,13 @@ Task plans require a currently active pairing owned by the authenticated user. K
 
 ```json
 {
-  "pairingToken":"<PAIRING_TOKEN>",
   "clientRequestId":"<UUID>",
   "title":"Place a cup on a table",
   "steps":[{"instruction":"Place the cup on the table."}]
 }
 ```
 
-The title is 1-160 characters after normalization; there must be 1-30 steps, each instruction 1-1,000 characters, with at most 16,000 combined instruction characters. Text is Unicode NFKC normalized, trimmed, and whitespace collapsed. Initial free-form plan generation is not implemented. Creation saves the original steps as version 1 and uses the model to produce a draft proposal as version 2. Success is 201 and returns the current plan. Retry a failed creation with the same clientRequestId and identical request. Its fields include `taskPlanId`, `title`, `status`, `currentVersion`, nullable `approvedVersion`, `createdAt`, `updatedAt`, `sourceSteps` with ordinal and instruction, `validationStatus`, nullable `validation`, and `revisionHistory`. Store the returned `taskPlanId`.
+The title is 1-160 characters after normalization; there must be 1-30 steps, each instruction 1-1,000 characters, with at most 16,000 combined instruction characters. Text is Unicode NFKC normalized, trimmed, and whitespace collapsed. Pairing is not needed to create a plan. For backward compatibility, an optional `pairingToken` is accepted; if supplied it must be active and owned by the caller. Omit it in new clients. Initial free-form plan generation is not implemented. Creation saves the original steps as version 1 and uses the model to produce a draft proposal as version 2. Success is 201 and returns the current plan. Retry a failed creation with the same clientRequestId and identical request. Its fields include `taskPlanId`, `title`, `status`, `currentVersion`, nullable `approvedVersion`, `createdAt`, `updatedAt`, `sourceSteps` with ordinal and instruction, `validationStatus`, nullable `validation`, and `revisionHistory`. Store the returned `taskPlanId`.
 
 Generated and refined `sourceSteps` also include `prechecks`, `postchecks`, `acceptanceCriteria`, `safetyNotes`, and `openQuestions`, each an array of up to three strings of at most 240 characters. `instruction` is the action. Render the checks and criteria under their step, show any safety notes and open questions, and ask the user to resolve questions through refinement. Checks are suggestions, not assertions that they passed. Approval is blocked while step questions remain. Older saved plans and the original version 1 can omit these fields, so treat missing arrays as empty. This is additive: existing clients that render only `instruction` remain compatible, but will not show the detailed guidance until updated.
 
@@ -229,6 +254,7 @@ version separately.
   "approvedVersion":null,
   "createdAt":"2026-01-01T12:00:00.000Z",
   "updatedAt":"2026-01-01T12:00:01.000Z",
+  "expiresAt":"2026-01-01T14:00:00.000Z",
   "sourceSteps":[{"ordinal":1,"instruction":"Place the cup on the table.","prechecks":["Check that the table surface is clear."],"postchecks":["Check that the cup is on the table."],"acceptanceCriteria":["The cup rests upright on the table."],"safetyNotes":[],"openQuestions":[]}],
   "validationStatus":"not_validated",
   "validation":null,
@@ -249,7 +275,7 @@ but separate attempts are not guaranteed to produce identical text.
 
 ### Read and validate
 
-`GET /v1/task-plans/<TASK_PLAN_UUID>` returns the same current representation for the owner while its pairing is active. `POST /v1/task-plans/<TASK_PLAN_UUID>/validate` invokes the optional model review for a draft and returns the updated plan. Use `{}` as the JSON body. The validation can report `planSummary`, `needsUserClarification`, `clarificationQuestions`, normalized `steps`, `planRisks`, `unsupportedClaims`, `guidelineChecks`, `approvalBlockers`, and `approvalReady`. Show each step's canonical instruction, visual criteria, risk, and confirmation label as well as the source steps. Validation is not approval.
+`GET /v1/task-plans/<TASK_PLAN_UUID>` returns the current representation to its owner, or to any signed-in user if it is approved. Other users receive an empty `revisionHistory`. No pairing is needed. `POST /v1/task-plans/<TASK_PLAN_UUID>/validate` invokes the optional model review for the owner's draft and returns the updated plan. Use `{}` as the JSON body. The validation can report `planSummary`, `needsUserClarification`, `clarificationQuestions`, normalized `steps`, `planRisks`, `unsupportedClaims`, `guidelineChecks`, `approvalBlockers`, and `approvalReady`. Show each step's canonical instruction, visual criteria, risk, and confirmation label as well as the source steps. Validation is not approval.
 
 **Review limitations:** A structurally valid model response can still contain incorrect or contradictory checks. Live tests produced checks that assumed later actions had already occurred, and a review incorrectly marked such a plan ready. `approvalReady` and a successful approval are not guarantees of correctness or safety. Show the full plan for human review, including the sequence, questions, warnings, and checks; let the user refine incorrect details before approval. An explicit approval action remains required. Do not display a failed validation as a successful validation: keep the plan visible, show the error and request ID, and clear any stale success message for that operation.
 
@@ -279,10 +305,12 @@ After the user explicitly approves the displayed current version, call `POST /v1
 `POST /v1/task-runs` requires an approved plan and an active pairing:
 
 ```json
-{"taskPlanId":"<TASK_PLAN_UUID>","clientRequestId":"<UUID>"}
+{"taskPlanId":"<TASK_PLAN_UUID>","clientRequestId":"<UUID>","pairingToken":"<PAIRING_TOKEN>"}
 ```
 
-The 201 response includes `taskRunId`, `taskPlanId`, `planVersion`, `status`, `currentStepOrdinal`, `stateVersion`, and `lensInstruction`. The server publishes the first instruction to display. Wait for a successful start before capturing guidance frames. `GET /v1/task-runs/<TASK_RUN_UUID>` returns these fields plus `currentStepStatus`, timestamps, and nullable `stoppedAt`. Runs can be `active`, `paused`, `completed`, or `stopped`. A plan must be approved and its pairing active; an existing active run can also prevent starting another. An expired pairing can make the run unavailable.
+The `pairingToken` is the selecting user's currently active device pairing. Any signed-in user may start an approved shared plan with their own pairing. Different users may run the same plan concurrently; the same user can have only one active or paused run of a given plan version. Reusing a request ID with a different plan or pairing returns `409 task_run_idempotency_conflict`; a separate active run returns `409 task_run_already_active`. Legacy clients can omit the token only when using their own plan's original active pairing; new clients should always send it.
+
+The 201 response includes `taskRunId`, `taskPlanId`, `planVersion`, `status`, `currentStepOrdinal`, `stateVersion`, and `lensInstruction`. The server publishes the first instruction to display. Wait for a successful start before capturing guidance frames. `GET /v1/task-runs/<TASK_RUN_UUID>` returns these fields plus `currentStepStatus`, timestamps, and nullable `stoppedAt`. Runs can be `active`, `paused`, `completed`, or `stopped`. An expired run pairing can make the run unavailable.
 
 A representative start response is:
 
@@ -329,6 +357,18 @@ A successful command response has this shape:
 ```
 
 Use the latest returned `stateVersion` for every command. On `409 task_run_stale`, fetch the run, update the UI, and ask the user to retry an action that is still appropriate. Do not silently replay a stale confirmation. Reuse the original `clientRequestId` and payload only when retrying the same operation after an uncertain network result. User commands, not visual model observations, control step progression.
+
+### Run state and visual step checks
+
+Approval stores a particular plan version. Starting it creates a separate run at step 1, in `active` state with `stateVersion: 1`. `pause` changes active to paused; `resume` changes paused to active. While active, `confirm` or `skip` moves to the next step, or marks the run `completed` on the last step. `back` returns to the previous step when active and not on step 1. `repeat` and `correct` republish the current instruction; `stop` ends an active or paused run. Every accepted command increments `stateVersion`, including repeat and correct. Completed and stopped runs are terminal. The server rejects invalid transitions and stale state versions.
+
+An inference window is an asynchronous observation, not a video stream. The worker sends the current step's instruction, its approved review's `visualAcceptanceCriteria`, and the submitted images to the vision model. The model returns a summary, frame indexes, confidence, and one proposed result: `remain_in_progress`, `candidate_complete`, or `blocked`. The backend validates that response and stores it, but it does **not** change the run's step, status, or `stateVersion`. If the run state changed while inference was in flight, the stale result cannot update the display. A successful current observation publishes the current instruction, a request to confirm possible completion, or a camera-correction prompt to the shared display. The phone can recognize a published result by `responseId: "task_observation_<inferenceWindowId>"`.
+
+The client cannot currently fetch an observation's summary, confidence, evidence, or final worker status through an API. A `202` means queued, not that inference succeeded or a step passed. A missing display update can mean the result is still pending, failed, or became stale. Do not infer completion from a frame or from `202`: ask the user to confirm, then send the `confirm` command. The model's camera-based assessment may be wrong and cannot establish checks that are not visible.
+
+### Talking during guidance
+
+The user can speak while the phone captures frames, but this backend does not receive audio in inference windows, transcribe speech, stream microphone audio, or synthesize speech. The app must handle microphone capture and speech recognition itself if it wants voice interaction. It can submit recognized text through `POST /v1/chat`, using the normal chat request and active pairing; that is a separate request and does not attach the transcript to the current inference window or change task-run state. Chat and task guidance both publish to the same latest-display slot, so one can overwrite the other's display message. Coordinate and show these messages carefully in the app. If the app maps a spoken instruction to a run command, send the normal command with the current `stateVersion`; do not treat speech recognition or a chat response as automatic confirmation.
 
 ### Submit an inference window
 
@@ -415,6 +455,8 @@ pairing capabilities, request bodies, images, or provider credentials.
 | `409 task_plan_idempotency_conflict` | A create or refinement request ID was reused for a different operation. Generate a new UUID for the new operation. |
 | `409 task_plan_stale`, `task_plan_changed` | Fetch the current plan and let the user review it before issuing a new edit or approval. |
 | `409 task_plan_guidelines_failed` | Fetch the plan; show `validation.approvalBlockers` and `clarificationQuestions`, then allow refinement. |
+| `409 task_run_idempotency_conflict`, `task_run_already_active` | Use a new request ID for a different run; resume or stop the existing active run before starting that plan version again. |
+| `410 task_plan_expired` | The unapproved draft passed its two-hour lifetime. Create a new plan with a new request ID. |
 | `409 task_plan_not_draft`, `task_plan_not_refinable`, `task_plan_not_approvable`, `task_plan_has_runs`, `task_plan_revision_limit` | The requested plan operation is unavailable in its current lifecycle. Fetch and display the current state. |
 | `409 task_run_not_ready`, `task_run_invalid_transition`, `task_run_not_active` | Check plan approval, pairing, and current run state; do not blindly replay a command. |
 | `409 task_run_stale` | Read the run; the optional `error.context.state_version` may help, but use the full current state for the UI. |

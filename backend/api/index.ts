@@ -302,9 +302,31 @@ async function rpc<T>(name: string, parameters: Record<string, unknown>): Promis
           ) as result
         `)[0].result as T;
       }
+      case "edge_api_create_task_plan_library": {
+        return (await database`
+          select app.create_task_plan_library(${parameters.p_task_plan_id as string}, ${ownerId},
+            ${parameters.p_client_request_id as string}, ${parameters.p_title as string},
+            ${database.json(parameters.p_source_steps as postgres.JSONValue)}) as result
+        `)[0].result as T;
+      }
       case "edge_api_get_task_plan": {
         return (await database`
           select app.task_plan_view(${parameters.p_task_plan_id as string}, ${ownerId}) as result
+        `)[0].result as T;
+      }
+      case "edge_api_list_task_plans": {
+        return (await database`
+          select app.list_task_plans(${ownerId}, ${parameters.p_status as string | null},
+            ${parameters.p_limit as number}, ${parameters.p_offset as number}) as result
+        `)[0].result as T;
+      }
+      case "edge_api_delete_expired_task_plans":
+        return (await database`select app.delete_expired_task_plans() as result`)[0].result as T;
+      case "edge_api_start_task_run_for_pairing": {
+        return (await database`
+          select app.start_task_run_for_pairing(${parameters.p_task_run_id as string},
+            ${parameters.p_task_plan_id as string}, ${ownerId},
+            ${parameters.p_client_request_id as string}, ${tokenHash}) as result
         `)[0].result as T;
       }
       case "edge_api_save_task_plan_validation": {
@@ -1287,6 +1309,40 @@ export function logInference(level: "info" | "error", entry: Record<string, unkn
   }
 }
 
+let taskPlanCleanupRunning = false;
+export async function runTaskPlanCleanup(cleanup: () => Promise<number>): Promise<void> {
+  if (taskPlanCleanupRunning) return;
+  taskPlanCleanupRunning = true;
+  const started = performance.now();
+  const requestId = crypto.randomUUID();
+  try {
+    const deleted = await cleanup();
+    if (deleted > 0) {
+      logInference("info", {
+        event: "task_plan_cleanup_completed",
+        request_id: requestId,
+        operation: "delete_expired_task_plans",
+        environment: requestEnvironment(),
+        outcome: "success",
+        deleted,
+        duration_ms: Math.round(performance.now() - started),
+      });
+    }
+  } catch {
+    logInference("error", {
+      event: "task_plan_cleanup_failed",
+      request_id: requestId,
+      operation: "delete_expired_task_plans",
+      environment: requestEnvironment(),
+      outcome: "failure",
+      error_code: "task_plan_cleanup_failed",
+      duration_ms: Math.round(performance.now() - started),
+    });
+  } finally {
+    taskPlanCleanupRunning = false;
+  }
+}
+
 async function processTaskInferenceWindow(): Promise<void> {
   if (inferenceWorkerRunning) return;
   inferenceWorkerRunning = true;
@@ -1452,7 +1508,7 @@ async function taskPlanModelStage<T>(
 async function handleTaskPlanCreate(request: Request, requestId: string): Promise<Response> {
   const user = await authenticate(request);
   const payload = await requestJson(request);
-  const token = validateToken(payload.pairingToken);
+  const token = payload.pairingToken === undefined ? null : validateToken(payload.pairingToken);
   const clientRequestId = validateUuid(payload.clientRequestId, "clientRequestId");
   let planInput;
   try {
@@ -1460,19 +1516,22 @@ async function handleTaskPlanCreate(request: Request, requestId: string): Promis
   } catch (error) {
     return taskPlanInputError(error);
   }
-  await pairingAccess(token, user.id);
+  if (token) await pairingAccess(token, user.id);
   let plan: TaskPlan;
   try {
     plan = await createPlanWithModel(planInput, clientRequestId, {
       createDraft: async () => {
-        const draft = await rpc<TaskPlan | null>("edge_api_create_task_plan", {
-          p_task_plan_id: crypto.randomUUID(),
-          p_token_hash: await tokenHash(token),
-          p_owner_id: user.id,
-          p_client_request_id: clientRequestId,
-          p_title: planInput.title,
-          p_source_steps: planInput.steps,
-        });
+        const draft = await rpc<TaskPlan | null>(
+          token ? "edge_api_create_task_plan" : "edge_api_create_task_plan_library",
+          {
+            p_task_plan_id: crypto.randomUUID(),
+            ...(token ? { p_token_hash: await tokenHash(token) } : {}),
+            p_owner_id: user.id,
+            p_client_request_id: clientRequestId,
+            p_title: planInput.title,
+            p_source_steps: planInput.steps,
+          },
+        );
         if (!draft) {
           throw new ApiError(401, "Unknown or expired pairing token. Re-pair on the phone.", true);
         }
@@ -1554,6 +1613,14 @@ async function handleTaskPlanCreate(request: Request, requestId: string): Promis
       "clientRequestId was already used for a different plan.",
       false,
       "task_plan_idempotency_conflict",
+    );
+  }
+  if (plan.access === "expired") {
+    throw new ApiError(
+      410,
+      "This unapproved plan expired. Create a new plan.",
+      false,
+      "task_plan_expired",
     );
   }
   return jsonResponse(plan, 201);
@@ -1926,18 +1993,41 @@ async function handleTaskRunStart(request: Request): Promise<Response> {
   const payload = await requestJson(request);
   const taskPlanId = validateUuid(payload.taskPlanId, "taskPlanId");
   const clientRequestId = validateUuid(payload.clientRequestId, "clientRequestId");
-  const taskRun = await rpc<TaskPlan | null>("edge_api_start_task_run", {
-    p_task_run_id: crypto.randomUUID(),
-    p_task_plan_id: taskPlanId,
-    p_owner_id: user.id,
-    p_client_request_id: clientRequestId,
-  });
+  const pairingHash = payload.pairingToken === undefined
+    ? undefined
+    : await tokenHash(validateToken(payload.pairingToken));
+  const taskRun = await rpc<TaskPlan | null>(
+    pairingHash ? "edge_api_start_task_run_for_pairing" : "edge_api_start_task_run",
+    {
+      p_task_run_id: crypto.randomUUID(),
+      p_task_plan_id: taskPlanId,
+      p_owner_id: user.id,
+      p_client_request_id: clientRequestId,
+      ...(pairingHash ? { p_token_hash: pairingHash } : {}),
+    },
+  );
   if (!taskRun) {
     throw new ApiError(
       409,
       "Task plan must be approved and linked to an active pairing before starting.",
       false,
       "task_run_not_ready",
+    );
+  }
+  if (taskRun.outcome === "idempotency_conflict") {
+    throw new ApiError(
+      409,
+      "This request ID was used for a different task run.",
+      false,
+      "task_run_idempotency_conflict",
+    );
+  }
+  if (taskRun.outcome === "active_exists") {
+    throw new ApiError(
+      409,
+      "This plan already has an active or paused run.",
+      false,
+      "task_run_already_active",
     );
   }
   if (typeof taskRun.taskRunId !== "string") {
@@ -2048,9 +2138,42 @@ function routePath(pathname: string): string {
   return pathname;
 }
 
+export function taskPlanListQuery(
+  url: URL,
+): { status: string | null; limit: number; offset: number } {
+  for (const key of url.searchParams.keys()) {
+    if (!["status", "limit", "offset"].includes(key) || url.searchParams.getAll(key).length !== 1) {
+      throw new ApiError(422, "Invalid task plan list parameters.");
+    }
+  }
+  const status = url.searchParams.get("status");
+  if (
+    status !== null && !["draft", "awaiting_approval", "approved", "abandoned"].includes(status)
+  ) {
+    throw new ApiError(422, "status is not supported.");
+  }
+  const numberParam = (name: string, fallback: number, min: number, max: number): number => {
+    const raw = url.searchParams.get(name);
+    if (raw === null) return fallback;
+    if (!/^(0|[1-9]\d*)$/.test(raw) || Number(raw) < min || Number(raw) > max) {
+      throw new ApiError(422, `${name} is outside the supported range.`);
+    }
+    return Number(raw);
+  };
+  return {
+    status,
+    limit: numberParam("limit", 50, 1, 100),
+    offset: numberParam("offset", 0, 0, 2147483547),
+  };
+}
+
 if (Deno.env.get("APP_ENV") === "aws") {
   void processTaskInferenceWindow();
   setInterval(() => void processTaskInferenceWindow(), 2_000);
+  const cleanPlans = () =>
+    runTaskPlanCleanup(() => rpc<number>("edge_api_delete_expired_task_plans", {}));
+  void cleanPlans();
+  setInterval(() => void cleanPlans(), 60_000);
 }
 
 export async function handleApiRequest(request: Request): Promise<Response> {
@@ -2079,8 +2202,22 @@ export async function handleApiRequest(request: Request): Promise<Response> {
       response = await handleChat(request);
     } else if (request.method === "POST" && path === "/v1/images") {
       response = await handleImageUpload(request, url);
-    } else if (request.method === "POST" && path === "/v1/task-plans") {
-      response = await handleTaskPlanCreate(request, requestId);
+    } else if (
+      path === "/v1/task-plans" && (request.method === "POST" || request.method === "GET")
+    ) {
+      if (request.method === "POST") response = await handleTaskPlanCreate(request, requestId);
+      else {
+        const user = await authenticate(request);
+        const query = taskPlanListQuery(url);
+        response = jsonResponse(
+          await rpc("edge_api_list_task_plans", {
+            p_owner_id: user.id,
+            p_status: query.status,
+            p_limit: query.limit,
+            p_offset: query.offset,
+          }),
+        );
+      }
     } else if (request.method === "POST" && path === "/v1/task-runs") {
       response = await handleTaskRunStart(request);
     } else {

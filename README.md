@@ -19,6 +19,7 @@ Append the existing route to the environment base URL:
 - `POST /v1/images`
 - `DELETE /v1/images/{image_id}`
 - `POST /v1/task-plans`
+- `GET /v1/task-plans`
 - `GET /v1/task-plans/{task_plan_id}`
 - `POST /v1/task-plans/{task_plan_id}/refine`
 - `POST /v1/task-plans/{task_plan_id}/validate`

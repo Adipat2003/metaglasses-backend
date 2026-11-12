@@ -114,6 +114,16 @@ Pushing a merged commit to `main` triggers `.github/workflows/aws-deploy.yml`.
 The workflow needs the GitHub repository variable `METAGLASSES_AWS_DEPLOY_ROLE_ARN`, set to the
 `GitHubDeployRoleArn` output of `metaglasses-compute`.
 
+## Task-plan retention
+
+The task-plan library migration makes approved plans visible to all signed-in users and expires
+unapproved plans two hours after creation. Existing unapproved plans older than that become
+unavailable immediately and the API's cleanup job deletes them in batches after deployment.
+Approved plans are excluded. Check `task_plan_cleanup_completed` and
+`task_plan_cleanup_failed` application events to monitor deletion. Rolling back the container does
+not restore deleted plans or reverse a migration; recover deleted data from a suitable database
+backup if needed.
+
 ## Request time limit
 
 API Gateway HTTP APIs allow at most 30 seconds for a backend response. In AWS, NVIDIA and

@@ -318,7 +318,8 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     assert "Visual observability" in approval_guidelines
     assert "task_plan_guidelines_failed" in approval_guidelines
     assert "validateModelPlan" in validator_source
-    assert "POST\" && path === \"/v1/task-plans\"" in api_source
+    assert 'path === "/v1/task-plans"' in api_source
+    assert 'request.method === "POST" || request.method === "GET"' in api_source
     assert "POST\" && path === \"/v1/task-runs\"" in api_source
     assert "create table app.task_plans" in migration
     assert "grant execute on function app.start_task_run" in migration
