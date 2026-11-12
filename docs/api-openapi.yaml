@@ -503,9 +503,15 @@ components:
     SourceStep:
       type: object
       required: [ordinal, instruction]
+      description: Generated and refined steps include proposed checks. Older saved plans can omit them. The user must review suggestions and resolve open questions.
       properties:
         ordinal: { type: integer, minimum: 1 }
         instruction: { type: string }
+        prechecks: { type: array, maxItems: 3, items: { type: string, maxLength: 240 }, description: Conditions to check before the action. }
+        postchecks: { type: array, maxItems: 3, items: { type: string, maxLength: 240 }, description: Checks to perform after the action. }
+        acceptanceCriteria: { type: array, maxItems: 3, items: { type: string, maxLength: 240 }, description: Observable indications that the action succeeded. }
+        safetyNotes: { type: array, maxItems: 3, items: { type: string, maxLength: 240 }, description: Relevant suggested precautions. }
+        openQuestions: { type: array, maxItems: 3, items: { type: string, maxLength: 240 }, description: Missing information to resolve through refinement before approval. }
     TaskPlan:
       type: object
       required: [taskPlanId, title, status, currentVersion, approvedVersion, createdAt, updatedAt, sourceSteps, validationStatus, validation, revisionHistory]

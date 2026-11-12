@@ -29,6 +29,23 @@ review. The backend checks the model's structured output and controls persistenc
 A model cannot approve a plan. Calls use temperature zero, but separate model calls may produce
 different outputs; saved results and idempotent retries use the persisted proposal.
 
+Generated and refined steps include the action in `instruction`, along with suggested prechecks,
+postchecks, acceptance criteria, safety notes, and unresolved questions. The user must review them;
+they do not establish that a check has passed. Existing saved steps can lack these additive fields.
+Any step with an unresolved question blocks approval until the user refines it. Reviews map results
+to source ordinals and use the backend's saved instructions, instead of relying on the model to copy
+them. Invalid model responses log a safe `model_failure_reason` alongside the request ID; no model
+output or user plan is logged. Longer outputs remain subject to model output and request time limits.
+In AWS, generation, refinement, validation, and approval review each allow up to 20 seconds for
+the model request, leaving room within the API Gateway request limit for other processing.
+Requests use Bedrock structured output with a fixed JSON schema, followed by backend checks for
+field bounds, step mapping, and approval rules. A new or expired schema can require Bedrock grammar
+compilation, which may exceed the request timeout. In that case the request fails safely and can be
+retried. A schema-valid response can still contain incorrect guidance, so it requires user review.
+When a review proposes additional trailing steps, those entries are not included in the review;
+approval is blocked and the user is prompted to revise the plan. A missing or reordered source step
+causes the review to fail safely.
+
 ## Run and observation
 
 Starting a run publishes the first instruction to the lens display. The user can pause, resume,
