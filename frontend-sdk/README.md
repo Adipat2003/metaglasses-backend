@@ -1,21 +1,44 @@
-# Frontend API types
+# MetaGlasses SDK
 
-`api-types.d.ts` is generated from [`docs/api-openapi.yaml`](../docs/api-openapi.yaml). It
-contains the endpoint paths, methods, parameters, request bodies, response bodies, and shared
-schemas as TypeScript types. `client.ts` provides a small typed `fetch` client with bearer
-authentication, path and query parameter handling, JSON and raw image uploads, and structured
-HTTP errors. It has no runtime dependency.
+The API origin is supplied by the app at runtime. The SDK has no baked-in backend address and
+does not read environment variables or persist credentials.
 
 ```ts
-import { createClient } from "./frontend-sdk/client.ts";
+import { createClient, ApiRequestError, SdkValidationError } from "metaglasses-sdk";
 
-const api = createClient({ baseUrl: "https://your-api.example", accessToken });
-const plans = await api.request("/v1/task-plans", "get", { params: { query: { limit: 50 } } });
+const api = createClient({
+  baseUrl: appConfig.metaglassesApiBaseUrl,
+  accessToken,
+});
+
+try {
+  const plan = await api.createTaskPlan({
+    clientRequestId: crypto.randomUUID(),
+    title: "Make tea",
+    steps: [{ instruction: "Place a teabag in the cup." }],
+  });
+  console.log(plan.taskPlanId);
+} catch (error) {
+  if (error instanceof SdkValidationError) {
+    // Correct the input before retrying. No request was sent.
+  } else if (error instanceof ApiRequestError) {
+    // Use error.code for recovery and error.requestId for support.
+  }
+}
 ```
 
-Regenerate after changing the API contract with `bash scripts/generate-frontend-sdk.sh`. CI checks
-that the generated file matches the OpenAPI document and type-checks the client.
+Calls are named functions on the client. TypeScript types describe each call's input and output.
+Each function's editor documentation states its authentication, pairing, ownership, state, and
+retry prerequisites. The SDK checks local input constraints before sending requests. State that
+can change on the server, such as whether a plan is approved or a run is still active, remains a
+server decision and is returned as an `ApiRequestError` with its status and machine-readable code.
 
-For authentication, pairing, error handling, limits, and end-to-end client flows, see the
-[backend/frontend handoff](../docs/backend-frontend-handoff.md). Treat the OpenAPI document and
-this generated file as the endpoint contract; do not infer routes from database functions.
+Typical flows use `setPairingState` to register the phone pairing, `createChatResponse` for a
+conversation, or `uploadPairingImage` before attaching the returned image ID to a user message.
+Task guidance uses `createTaskPlan`, `validateTaskPlan`, `approveTaskPlan`, and `startTaskRun` in
+that order. Read the run with `getTaskRun` before applying `commandTaskRun` or submitting an
+inference window, and use its latest `stateVersion`.
+
+`ApiTransportError` represents a network failure or timeout. `ApiProtocolError` means the server
+returned success with a non-JSON body. API failures expose `status`, `code`, `requestId`, and safe
+context on `ApiRequestError`. The SDK never logs credentials or request contents.

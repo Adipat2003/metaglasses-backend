@@ -30,7 +30,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Register or refresh a pairing and set phone state */
+        /**
+         * Register or refresh a pairing and set phone state
+         * @description Requires a Cognito access token and a 32-character pairing token registered to the caller.
+         *     Registering or refreshing the pairing renews its one-hour lifetime. Call this while the
+         *     phone session is active; display polling does not renew the pairing.
+         */
         post: operations["setPairingState"];
         delete?: never;
         options?: never;
@@ -47,7 +52,9 @@ export interface paths {
         };
         /**
          * Read the current lens display
-         * @description The pairing token is the capability credential; never log or share its URL.
+         * @description Requires a current pairing token as the `token` query parameter. No Cognito token is
+         *     required. The pairing token is a capability credential: never log or share it. Polling
+         *     does not renew the pairing; `responseId` changes when a new message is published.
          */
         get: operations["getDisplay"];
         put?: never;
@@ -69,10 +76,12 @@ export interface paths {
         put?: never;
         /**
          * Generate and publish a chat response
-         * @description The client sends the conversation each time; the server does not retain history.
-         *     imageIds are permitted on user messages only. Serialized messages are limited to
-         *     256000 UTF-8 bytes. Calls are not idempotent. The optional provider is stateless;
-         *     provider-specific credential fields are documented in the backend README.
+         * @description Requires a Cognito access token and an active pairing owned by the caller. The client
+         *     sends the complete conversation on every call; the server does not retain history.
+         *     Image IDs are allowed on user messages only and must belong to this pairing. The compact
+         *     JSON transcript limit is 256000 UTF-8 bytes. Calls are not idempotent, so do not retry
+         *     after an uncertain response without considering that another model response may be
+         *     generated. Optional provider credentials are used for this call only and are not stored.
          */
         post: operations["createChatResponse"];
         delete?: never;
@@ -90,7 +99,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Upload raw JPEG or PNG image bytes */
+        /**
+         * Upload raw JPEG or PNG image bytes
+         * @description Requires a Cognito access token and an active pairing owned by the caller. Send a nonempty
+         *     raw JPEG or PNG file as the body; JSON, base64, and multipart bodies are rejected. The
+         *     declared content type must match the file signature. The file is limited to 8 MiB.
+         */
         post: operations["uploadPairingImage"];
         delete?: never;
         options?: never;
@@ -108,7 +122,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete one image from the active pairing */
+        /**
+         * Delete one image from the active pairing
+         * @description Requires a Cognito access token, an active pairing owned by the caller, and an image uploaded to that pairing.
+         */
         delete: operations["deletePairingImage"];
         options?: never;
         head?: never;
@@ -124,7 +141,8 @@ export interface paths {
         };
         /**
          * List shared approved plans and the signed-in user's own plans
-         * @description Returns all approved plans and the caller's unexpired private plans. No device pairing is needed.
+         * @description Requires a Cognito access token. No device pairing is needed. Returns all approved plans
+         *     and the caller's unexpired private plans, never another user's unapproved plans.
          *     Unapproved plans expire two hours after creation; approved plans do not expire.
          *     Sort order is createdAt descending, then taskPlanId descending. Offset pagination can
          *     shift when plans are created or approved between requests; refresh from offset zero.
@@ -159,7 +177,7 @@ export interface paths {
         };
         /**
          * Read the current plan version and review
-         * @description Owners can read their own plans; any signed-in user can read approved plans. Revision history is returned only to the owner.
+         * @description Requires a Cognito access token. The caller can read their own plan or any approved plan. Revision history is returned only to the owner.
          */
         get: operations["getTaskPlan"];
         put?: never;
@@ -183,9 +201,10 @@ export interface paths {
         put?: never;
         /**
          * Propose a revised plan version
-         * @description Use the current version and a new request ID for a new edit. Reuse both the ID and
-         *     message for retries. Refinement invalidates the previous review. Initial creation
-         *     uses one revision, leaving at most nine subsequent revisions.
+         * @description Requires a Cognito access token and a draft plan owned by the caller. Use the current
+         *     version and a new request ID for a new edit. Reuse both the ID and identical message for
+         *     retries. Refinement invalidates the previous review. Initial creation uses one revision,
+         *     leaving at most nine subsequent revisions.
          */
         post: operations["refineTaskPlan"];
         delete?: never;
@@ -207,7 +226,7 @@ export interface paths {
         put?: never;
         /**
          * Review the current draft without approving it
-         * @description A review is saved only if the reviewed version is still current.
+         * @description Requires a Cognito access token and a draft plan owned by the caller. A review is saved only if the reviewed version is still current. This can call the configured plan review model.
          */
         post: operations["validateTaskPlan"];
         delete?: never;
@@ -229,8 +248,10 @@ export interface paths {
         put?: never;
         /**
          * Review and approve the current version after explicit user consent
-         * @description Runs a strict review and approves only if its checks pass and the plan is unchanged.
-         *     On task_plan_guidelines_failed, retrieve the plan to display saved blockers and questions.
+         * @description Requires a Cognito access token, a draft plan owned by the caller, and explicit user
+         *     consent to publish the plan to all signed-in users. Runs a strict review and approves only
+         *     if all checks pass and the plan is unchanged. On task_plan_guidelines_failed, retrieve
+         *     the plan to display saved blockers and questions.
          */
         post: operations["approveTaskPlan"];
         delete?: never;
@@ -250,7 +271,10 @@ export interface paths {
         put?: never;
         /**
          * Start an approved plan on the caller's active pairing
-         * @description Include pairingToken when selecting any shared approved plan. Omitting it retains legacy behavior using the plan creator's original active pairing.
+         * @description Requires a Cognito access token, an approved and validated plan, and an active pairing
+         *     owned by the caller. Supply pairingToken when selecting any shared plan. Reuse the same
+         *     clientRequestId and payload after an uncertain result. At most one active or paused run
+         *     can exist for a plan version.
          */
         post: operations["startTaskRun"];
         delete?: never;
@@ -268,7 +292,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Read the current task-run state */
+        /**
+         * Read the current task-run state
+         * @description Requires a Cognito access token and a task run owned by the caller with its pairing still active.
+         */
         get: operations["getTaskRun"];
         put?: never;
         post?: never;
@@ -291,7 +318,11 @@ export interface paths {
         put?: never;
         /**
          * Apply an explicit user command
-         * @description Reuse the same clientRequestId for retries. On stale state, fetch the run before another user decision.
+         * @description Requires a Cognito access token and an active or paused run owned by the caller. Use the
+         *     latest stateVersion as expectedStateVersion. A command's validity depends on the current
+         *     run state; on a stale or invalid transition response, fetch the run before deciding again.
+         *     Reuse the same clientRequestId and identical command payload when retrying an uncertain
+         *     result.
          */
         post: operations["commandTaskRun"];
         delete?: never;
@@ -311,7 +342,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Stop a task run */
+        /**
+         * Stop a task run
+         * @description Requires a Cognito access token and an active or paused run owned by the caller. Supply its latest stateVersion and reuse the request ID if retrying an uncertain result.
+         */
         post: operations["stopTaskRun"];
         delete?: never;
         options?: never;
@@ -332,10 +366,12 @@ export interface paths {
         put?: never;
         /**
          * Queue one to three previously uploaded frames
-         * @description Images must belong to this pairing and each be at most 2 MiB. Times must be canonical
-         *     UTC ISO timestamps with milliseconds, in strictly increasing order, between 30 seconds
-         *     before and 5 seconds after server time. Sequence numbers increase per run. A 202 means
-         *     queued, not completed; observations do not advance the run.
+         * @description Requires a Cognito access token and an active run owned by the caller. All referenced
+         *     images must belong to its active pairing and each be at most 2 MiB. Submit one to three
+         *     unique image IDs. Capture times must be canonical UTC ISO timestamps with milliseconds,
+         *     strictly increasing, and between 30 seconds before and 5 seconds after server time.
+         *     Sequence numbers increase per run; reuse the same request ID and payload for retries.
+         *     A 202 means queued, not completed; observations do not advance the run.
          */
         post: operations["submitInferenceWindow"];
         delete?: never;
@@ -355,25 +391,37 @@ export interface components {
             expectedStateVersion: number;
         };
         TaskRun: {
-            /** @enum {string} */
-            outcome?: "applied";
             /** Format: uuid */
             taskRunId: string;
             /** Format: uuid */
-            taskPlanId?: string;
-            planVersion?: number;
+            taskPlanId: string;
+            planVersion: number;
             /** @enum {string} */
             status: "active" | "paused" | "stopped" | "completed";
             currentStepOrdinal: number;
-            currentStepStatus?: string;
+            /** @enum {string} */
+            currentStepStatus?: "in_progress" | "confirmed" | "skipped";
             stateVersion: number;
             lensInstruction: string;
             /** Format: date-time */
-            createdAt?: string;
+            createdAt: string;
             /** Format: date-time */
-            updatedAt?: string;
+            updatedAt: string;
             /** Format: date-time */
-            stoppedAt?: string | null;
+            stoppedAt: string | null;
+        };
+        TaskRunCommandResult: {
+            /** @enum {string} */
+            outcome: "applied";
+            /** Format: uuid */
+            taskRunId: string;
+            /** @enum {string} */
+            status: "active" | "paused" | "stopped" | "completed";
+            currentStepOrdinal: number;
+            /** @enum {string} */
+            currentStepStatus: "in_progress" | "confirmed" | "skipped";
+            stateVersion: number;
+            lensInstruction: string;
         };
         Error: {
             detail: string;
@@ -388,6 +436,31 @@ export interface components {
                     [key: string]: unknown;
                 };
             };
+        };
+        /** @description Optional per-request user supplied model provider credentials. The server validates provider-specific fields and does not persist them. Never store or log these values in the frontend. */
+        ExternalProvider: {
+            /** @enum {string} */
+            type: "openai" | "anthropic" | "google" | "nvidia" | "openrouter" | "groq" | "mistral" | "xai" | "together" | "fireworks" | "deepseek" | "perplexity" | "cerebras";
+            apiKey: string;
+            model: string;
+        } | {
+            /** @enum {string} */
+            type: "azure";
+            apiKey: string;
+            /**
+             * Format: uri
+             * @description HTTPS endpoint under openai.azure.com
+             */
+            endpoint: string;
+            model: string;
+        } | {
+            /** @enum {string} */
+            type: "aws-bedrock";
+            accessKeyId: string;
+            secretAccessKey: string;
+            sessionToken?: string;
+            region: string;
+            model: string;
         };
         /** @description Generated and refined steps include proposed checks. Older saved plans can omit them. The user must review suggestions and resolve open questions. */
         SourceStep: {
@@ -480,7 +553,7 @@ export interface components {
         };
     };
     responses: {
-        /** @description Run state or applied command. Fields vary by operation. */
+        /** @description Full current task run returned by start and read operations. */
         Run: {
             headers: {
                 "x-request-id": components["headers"]["RequestId"];
@@ -488,6 +561,16 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["TaskRun"];
+            };
+        };
+        /** @description Result of applying a command or stopping a run. */
+        RunCommand: {
+            headers: {
+                "x-request-id": components["headers"]["RequestId"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["TaskRunCommandResult"];
             };
         };
         /** @description Generated draft persisted. */
@@ -657,10 +740,7 @@ export interface operations {
                         content: string;
                         imageIds?: string[];
                     }[];
-                    /** @description See the README for the provider-specific fields and accepted types. */
-                    provider?: {
-                        [key: string]: unknown;
-                    };
+                    provider?: components["schemas"]["ExternalProvider"];
                 };
             };
         };
@@ -939,8 +1019,8 @@ export interface operations {
                     taskPlanId: string;
                     /** Format: uuid */
                     clientRequestId: string;
-                    /** @description Current active device pairing owned by the caller. */
-                    pairingToken?: string;
+                    /** @description Optional for legacy API callers. New clients should supply the caller's active pairing. */
+                    pairingToken?: components["schemas"]["PairingToken"];
                 };
             };
         };
@@ -990,7 +1070,7 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Run"];
+            200: components["responses"]["RunCommand"];
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
@@ -1015,7 +1095,7 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["Run"];
+            200: components["responses"]["RunCommand"];
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
@@ -1067,7 +1147,8 @@ export interface operations {
                         /** Format: uuid */
                         inferenceWindowId: string;
                         sequenceNumber: number;
-                        status: string;
+                        /** @enum {string} */
+                        status: "queued" | "processing" | "observed" | "rejected";
                         stateVersion: number;
                         /** Format: date-time */
                         createdAt: string;

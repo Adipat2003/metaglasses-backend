@@ -28,13 +28,15 @@ jobs:
         with:
           node-version: "22.16.0"
 
+      - name: Install frontend SDK tooling
+        run: npm ci --prefix frontend-sdk
+
       - name: Check generated frontend SDK
         run: |
-          bash scripts/generate-frontend-sdk.sh
+          npm run generate --prefix frontend-sdk
           git diff --exit-code -- frontend-sdk/api-types.d.ts
-          npx --yes --package=typescript@5.9.3 tsc --noEmit --strict \
-            --lib es2022,dom --target es2022 --moduleResolution bundler \
-            frontend-sdk/client.ts
+          npm test --prefix frontend-sdk
+          node scripts/check-frontend-sdk-package.mjs
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -61,7 +63,8 @@ jobs:
         run: |
           docker run --rm --volume "$PWD:/work" --workdir /work \
             denoland/deno:2.5.2 deno fmt --config backend/deno.json \
-            --check backend
+            --check backend frontend-sdk/client.ts scripts/build-frontend-sdk.mjs \
+            scripts/check-frontend-sdk-package.mjs
           docker run --rm --volume "$PWD:/work" --workdir /work \
             denoland/deno:2.5.2 deno check --config backend/deno.json \
             backend/api/index.ts \

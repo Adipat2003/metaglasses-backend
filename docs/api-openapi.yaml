@@ -36,6 +36,10 @@ paths:
     post:
       operationId: setPairingState
       summary: Register or refresh a pairing and set phone state
+      description: |
+        Requires a Cognito access token and a 32-character pairing token registered to the caller.
+        Registering or refreshing the pairing renews its one-hour lifetime. Call this while the
+        phone session is active; display polling does not renew the pairing.
       requestBody:
         required: true
         content:
@@ -57,7 +61,10 @@ paths:
     get:
       operationId: getDisplay
       summary: Read the current lens display
-      description: The pairing token is the capability credential; never log or share its URL.
+      description: |
+        Requires a current pairing token as the `token` query parameter. No Cognito token is
+        required. The pairing token is a capability credential: never log or share it. Polling
+        does not renew the pairing; `responseId` changes when a new message is published.
       security: []
       parameters:
         - { name: token, in: query, required: true, schema: { $ref: '#/components/schemas/PairingToken' } }
@@ -84,10 +91,12 @@ paths:
       operationId: createChatResponse
       summary: Generate and publish a chat response
       description: |
-        The client sends the conversation each time; the server does not retain history.
-        imageIds are permitted on user messages only. Serialized messages are limited to
-        256000 UTF-8 bytes. Calls are not idempotent. The optional provider is stateless;
-        provider-specific credential fields are documented in the backend README.
+        Requires a Cognito access token and an active pairing owned by the caller. The client
+        sends the complete conversation on every call; the server does not retain history.
+        Image IDs are allowed on user messages only and must belong to this pairing. The compact
+        JSON transcript limit is 256000 UTF-8 bytes. Calls are not idempotent, so do not retry
+        after an uncertain response without considering that another model response may be
+        generated. Optional provider credentials are used for this call only and are not stored.
       requestBody:
         required: true
         content:
@@ -108,9 +117,7 @@ paths:
                       content: { type: string, minLength: 1 }
                       imageIds: { type: array, items: { type: string, format: uuid } }
                 provider:
-                  type: object
-                  description: See the README for the provider-specific fields and accepted types.
-                  additionalProperties: true
+                  $ref: '#/components/schemas/ExternalProvider'
       responses:
         '200':
           description: Generated response saved and published.
@@ -136,6 +143,10 @@ paths:
     post:
       operationId: uploadPairingImage
       summary: Upload raw JPEG or PNG image bytes
+      description: |
+        Requires a Cognito access token and an active pairing owned by the caller. Send a nonempty
+        raw JPEG or PNG file as the body; JSON, base64, and multipart bodies are rejected. The
+        declared content type must match the file signature. The file is limited to 8 MiB.
       parameters:
         - { name: pairingToken, in: query, required: true, schema: { $ref: '#/components/schemas/PairingToken' } }
       requestBody:
@@ -169,6 +180,7 @@ paths:
     delete:
       operationId: deletePairingImage
       summary: Delete one image from the active pairing
+      description: Requires a Cognito access token, an active pairing owned by the caller, and an image uploaded to that pairing.
       parameters:
         - { name: imageId, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: pairingToken, in: query, required: true, schema: { $ref: '#/components/schemas/PairingToken' } }
@@ -185,7 +197,8 @@ paths:
       operationId: listTaskPlans
       summary: List shared approved plans and the signed-in user's own plans
       description: |
-        Returns all approved plans and the caller's unexpired private plans. No device pairing is needed.
+        Requires a Cognito access token. No device pairing is needed. Returns all approved plans
+        and the caller's unexpired private plans, never another user's unapproved plans.
         Unapproved plans expire two hours after creation; approved plans do not expire.
         Sort order is createdAt descending, then taskPlanId descending. Offset pagination can
         shift when plans are created or approved between requests; refresh from offset zero.
@@ -255,7 +268,7 @@ paths:
     get:
       operationId: getTaskPlan
       summary: Read the current plan version and review
-      description: Owners can read their own plans; any signed-in user can read approved plans. Revision history is returned only to the owner.
+      description: Requires a Cognito access token. The caller can read their own plan or any approved plan. Revision history is returned only to the owner.
       responses:
         '200': { $ref: '#/components/responses/Plan' }
         '401': { $ref: '#/components/responses/Error' }
@@ -269,9 +282,10 @@ paths:
       operationId: refineTaskPlan
       summary: Propose a revised plan version
       description: |
-        Use the current version and a new request ID for a new edit. Reuse both the ID and
-        message for retries. Refinement invalidates the previous review. Initial creation
-        uses one revision, leaving at most nine subsequent revisions.
+        Requires a Cognito access token and a draft plan owned by the caller. Use the current
+        version and a new request ID for a new edit. Reuse both the ID and identical message for
+        retries. Refinement invalidates the previous review. Initial creation uses one revision,
+        leaving at most nine subsequent revisions.
       requestBody:
         required: true
         content:
@@ -296,7 +310,7 @@ paths:
     post:
       operationId: validateTaskPlan
       summary: Review the current draft without approving it
-      description: A review is saved only if the reviewed version is still current.
+      description: Requires a Cognito access token and a draft plan owned by the caller. A review is saved only if the reviewed version is still current. This can call the configured plan review model.
       responses:
         '200': { $ref: '#/components/responses/Plan' }
         '401': { $ref: '#/components/responses/Error' }
@@ -311,8 +325,10 @@ paths:
       operationId: approveTaskPlan
       summary: Review and approve the current version after explicit user consent
       description: |
-        Runs a strict review and approves only if its checks pass and the plan is unchanged.
-        On task_plan_guidelines_failed, retrieve the plan to display saved blockers and questions.
+        Requires a Cognito access token, a draft plan owned by the caller, and explicit user
+        consent to publish the plan to all signed-in users. Runs a strict review and approves only
+        if all checks pass and the plan is unchanged. On task_plan_guidelines_failed, retrieve
+        the plan to display saved blockers and questions.
       responses:
         '200': { $ref: '#/components/responses/Plan' }
         '401': { $ref: '#/components/responses/Error' }
@@ -325,7 +341,11 @@ paths:
     post:
       operationId: startTaskRun
       summary: Start an approved plan on the caller's active pairing
-      description: Include pairingToken when selecting any shared approved plan. Omitting it retains legacy behavior using the plan creator's original active pairing.
+      description: |
+        Requires a Cognito access token, an approved and validated plan, and an active pairing
+        owned by the caller. Supply pairingToken when selecting any shared plan. Reuse the same
+        clientRequestId and payload after an uncertain result. At most one active or paused run
+        can exist for a plan version.
       requestBody:
         required: true
         content:
@@ -336,7 +356,7 @@ paths:
               properties:
                 taskPlanId: { type: string, format: uuid }
                 clientRequestId: { type: string, format: uuid }
-                pairingToken: { type: string, pattern: '^[0-9a-fA-F]{32}$', description: Current active device pairing owned by the caller. }
+                pairingToken: { allOf: [{ $ref: '#/components/schemas/PairingToken' }], description: Optional for legacy API callers. New clients should supply the caller's active pairing. }
       responses:
         '201': { $ref: '#/components/responses/Run' }
         '401': { $ref: '#/components/responses/Error' }
@@ -349,6 +369,7 @@ paths:
     get:
       operationId: getTaskRun
       summary: Read the current task-run state
+      description: Requires a Cognito access token and a task run owned by the caller with its pairing still active.
       responses:
         '200': { $ref: '#/components/responses/Run' }
         '401': { $ref: '#/components/responses/Error' }
@@ -361,7 +382,12 @@ paths:
     post:
       operationId: commandTaskRun
       summary: Apply an explicit user command
-      description: Reuse the same clientRequestId for retries. On stale state, fetch the run before another user decision.
+      description: |
+        Requires a Cognito access token and an active or paused run owned by the caller. Use the
+        latest stateVersion as expectedStateVersion. A command's validity depends on the current
+        run state; on a stale or invalid transition response, fetch the run before deciding again.
+        Reuse the same clientRequestId and identical command payload when retrying an uncertain
+        result.
       requestBody:
         required: true
         content:
@@ -374,7 +400,7 @@ paths:
                   properties:
                     command: { type: string, enum: [pause, resume, repeat, confirm, skip, back, correct, stop] }
       responses:
-        '200': { $ref: '#/components/responses/Run' }
+        '200': { $ref: '#/components/responses/RunCommand' }
         '401': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
@@ -387,11 +413,12 @@ paths:
     post:
       operationId: stopTaskRun
       summary: Stop a task run
+      description: Requires a Cognito access token and an active or paused run owned by the caller. Supply its latest stateVersion and reuse the request ID if retrying an uncertain result.
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/RunRequest' } } }
       responses:
-        '200': { $ref: '#/components/responses/Run' }
+        '200': { $ref: '#/components/responses/RunCommand' }
         '401': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
@@ -405,10 +432,12 @@ paths:
       operationId: submitInferenceWindow
       summary: Queue one to three previously uploaded frames
       description: |
-        Images must belong to this pairing and each be at most 2 MiB. Times must be canonical
-        UTC ISO timestamps with milliseconds, in strictly increasing order, between 30 seconds
-        before and 5 seconds after server time. Sequence numbers increase per run. A 202 means
-        queued, not completed; observations do not advance the run.
+        Requires a Cognito access token and an active run owned by the caller. All referenced
+        images must belong to its active pairing and each be at most 2 MiB. Submit one to three
+        unique image IDs. Capture times must be canonical UTC ISO timestamps with milliseconds,
+        strictly increasing, and between 30 seconds before and 5 seconds after server time.
+        Sequence numbers increase per run; reuse the same request ID and payload for retries.
+        A 202 means queued, not completed; observations do not advance the run.
       requestBody:
         required: true
         content:
@@ -443,7 +472,7 @@ paths:
                   outcome: { type: string, enum: [accepted] }
                   inferenceWindowId: { type: string, format: uuid }
                   sequenceNumber: { type: integer }
-                  status: { type: string }
+                  status: { type: string, enum: [queued, processing, observed, rejected] }
                   stateVersion: { type: integer }
                   createdAt: { type: string, format: date-time }
         '401': { $ref: '#/components/responses/Error' }
@@ -464,9 +493,13 @@ components:
       schema: { type: string, format: uuid }
   responses:
     Run:
-      description: Run state or applied command. Fields vary by operation.
+      description: Full current task run returned by start and read operations.
       headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
       content: { application/json: { schema: { $ref: '#/components/schemas/TaskRun' } } }
+    RunCommand:
+      description: Result of applying a command or stopping a run.
+      headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/TaskRunCommandResult' } } }
     CreatedPlan:
       description: Generated draft persisted.
       headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
@@ -499,20 +532,30 @@ components:
         expectedStateVersion: { type: integer, minimum: 1, maximum: 9000000000000000 }
     TaskRun:
       type: object
-      required: [taskRunId, status, currentStepOrdinal, stateVersion, lensInstruction]
+      required: [taskRunId, taskPlanId, planVersion, status, currentStepOrdinal, stateVersion, lensInstruction, createdAt, updatedAt, stoppedAt]
       properties:
-        outcome: { type: string, enum: [applied] }
         taskRunId: { type: string, format: uuid }
         taskPlanId: { type: string, format: uuid }
         planVersion: { type: integer }
         status: { type: string, enum: [active, paused, stopped, completed] }
         currentStepOrdinal: { type: integer }
-        currentStepStatus: { type: string }
-        stateVersion: { type: integer }
+        currentStepStatus: { type: string, enum: [in_progress, confirmed, skipped] }
+        stateVersion: { type: integer, minimum: 1 }
         lensInstruction: { type: string }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
         stoppedAt: { type: string, format: date-time, nullable: true }
+    TaskRunCommandResult:
+      type: object
+      required: [outcome, taskRunId, status, currentStepOrdinal, currentStepStatus, stateVersion, lensInstruction]
+      properties:
+        outcome: { type: string, enum: [applied] }
+        taskRunId: { type: string, format: uuid }
+        status: { type: string, enum: [active, paused, stopped, completed] }
+        currentStepOrdinal: { type: integer, minimum: 1 }
+        currentStepStatus: { type: string, enum: [in_progress, confirmed, skipped] }
+        stateVersion: { type: integer, minimum: 1 }
+        lensInstruction: { type: string }
     Error:
       type: object
       required: [detail, request_id, status, error]
@@ -528,6 +571,34 @@ components:
             code: { type: string }
             message: { type: string }
             context: { type: object, additionalProperties: true }
+    ExternalProvider:
+      description: Optional per-request user supplied model provider credentials. The server validates provider-specific fields and does not persist them. Never store or log these values in the frontend.
+      oneOf:
+        - type: object
+          required: [type, apiKey, model]
+          properties:
+            type: { type: string, enum: [openai, anthropic, google, nvidia, openrouter, groq, mistral, xai, together, fireworks, deepseek, perplexity, cerebras] }
+            apiKey: { type: string, minLength: 1, maxLength: 8192 }
+            model: { type: string, minLength: 1, maxLength: 300 }
+          additionalProperties: false
+        - type: object
+          required: [type, apiKey, endpoint, model]
+          properties:
+            type: { type: string, enum: [azure] }
+            apiKey: { type: string, minLength: 1, maxLength: 8192 }
+            endpoint: { type: string, format: uri, maxLength: 2048, description: HTTPS endpoint under openai.azure.com, services.ai.azure.com, or models.ai.azure.com. Credentials and custom ports are not accepted. }
+            model: { type: string, minLength: 1, maxLength: 300 }
+          additionalProperties: false
+        - type: object
+          required: [type, accessKeyId, secretAccessKey, region, model]
+          properties:
+            type: { type: string, enum: [aws-bedrock] }
+            accessKeyId: { type: string, minLength: 1, maxLength: 256 }
+            secretAccessKey: { type: string, minLength: 1, maxLength: 8192 }
+            sessionToken: { type: string, minLength: 1, maxLength: 8192 }
+            region: { type: string, minLength: 1, maxLength: 40, pattern: '^[a-z]{2}(-gov)?-[a-z]+-[0-9]$' }
+            model: { type: string, minLength: 1, maxLength: 300 }
+          additionalProperties: false
     SourceStep:
       type: object
       required: [ordinal, instruction]

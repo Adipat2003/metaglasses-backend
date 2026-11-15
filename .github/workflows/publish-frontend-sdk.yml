@@ -1,0 +1,51 @@
+name: Publish frontend SDK
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-sdk-publish-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.16.0"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install npm with trusted publishing support
+        run: npm install --global npm@11.5.1
+
+      - name: Install locked SDK tooling
+        run: npm ci --prefix frontend-sdk
+
+      - name: Regenerate and validate SDK
+        run: |
+          npm run generate --prefix frontend-sdk
+          git diff --exit-code -- frontend-sdk/api-types.d.ts
+          test "v$(node -p 'require("./frontend-sdk/package.json").version')" = "$GITHUB_REF_NAME"
+          npm test --prefix frontend-sdk
+          node scripts/check-frontend-sdk-package.mjs
+
+      - name: Publish public package with provenance
+        working-directory: frontend-sdk
+        run: npm publish --access public --provenance
