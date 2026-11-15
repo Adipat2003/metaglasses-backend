@@ -10,13 +10,13 @@ Use this map before searching the repository:
 | NVIDIA submission, polling, and tests | `backend/api/nvidia.ts`, `nvidia_test.ts` |
 | AWS database schema and functions | `database/migrations/` |
 | Cleanup worker | `backend/cleanup-pairing-images/index.ts` |
-| Local Python reference API | `app/` and `tests/` |
+| AWS configuration tests | `tests/` |
 | Environment templates | `config/env/` |
 | Canonical Postman collection and environments | `Adipat2003/metaglasses-postman` |
 | Local setup, deployment, and security | `docs/` |
 
 The hosted API runs on AWS. Deno source is under `backend/`.
-Treat `app/` as a local reference, not a deployment target. Never edit an applied migration. Canonical Postman assets live in the separate
+Never edit an applied migration. Canonical Postman assets live in the separate
 `Adipat2003/metaglasses-postman` repository and are not duplicated here.
 
 ## Efficient Navigation
@@ -27,7 +27,7 @@ Search the smallest relevant area first. Skip `uv.lock` unless it is directly re
 rg -n 'routePath|Deno.serve' backend/api
 rg -n 'NVIDIA|model_' backend/api docs
 rg -n 'create or replace function|grant execute' database/migrations
-rg -n 'operationId|@app\.' app tests
+rg -n 'operationId|Deno.test' backend tests
 rg -n 'COGNITO_|DATABASE_|AWS_' .github docs infrastructure
 ```
 
@@ -36,9 +36,9 @@ documentation in the same change.
 
 ## Development and Validation
 
-- `uv sync --locked --all-groups`: install the Python 3.12 environment.
+- `uv sync --locked --all-groups`: install the Python 3.12 test environment.
 - `uv run ruff check .`: lint Python.
-- `uv run python -m pytest`: run Python and repository configuration tests.
+- `uv run python -m pytest`: run AWS configuration tests.
 - `bash scripts/smoke-task-guidance-api.sh`: run the guarded AWS integration smoke test with a dedicated test user and pairing.
 
 Run the pinned Deno formatting, type-checking, and test commands from
@@ -143,7 +143,7 @@ restated in an issue or review.
 
 Copy the required template from `config/env/` to the ignored runtime path documented in
 `docs/local-development.md`. Never commit populated environment files, access tokens, API keys,
-database passwords, signing keys, or private URLs. Authentication bypass is valid only in the local Python reference service. The AWS API uses Cognito
+database passwords, signing keys, or private URLs. The AWS API uses Cognito
 access tokens and HTTPS. The current API allows all CORS origins; CORS is not authorization.
 
 ## Cross-repository Postman contract sync

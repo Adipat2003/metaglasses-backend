@@ -44,7 +44,7 @@ jobs:
       - name: Test
         run: uv run python -m pytest
 
-      - name: Check Edge Functions
+      - name: Check AWS backend
         run: |
           docker run --rm --volume "$PWD:/work" --workdir /work \
             denoland/deno:2.5.2 deno fmt --config backend/deno.json \

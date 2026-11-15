@@ -156,31 +156,16 @@ Postman exports or environments.
 
 ## Local development
 
-See [local development](docs/local-development.md) for repository checks, the Python reference
-service, and the AWS integration smoke test. The reference service does not reproduce the AWS API.
+See [local development](docs/local-development.md) for repository checks and the AWS integration
+smoke test.
 
 ## CI and deployment
 
-CI validates the Python reference implementation, TypeScript API, database configuration, and
-tests. After a push to `main`, `aws-deploy.yml` builds and deploys the API container to AWS using
+CI validates the TypeScript API and AWS database and infrastructure configuration. After a push to `main`, `aws-deploy.yml` builds and deploys the API container to AWS using
 GitHub OIDC and SSM, and applies pending RDS migrations before restarting the service.
 
 AWS infrastructure is managed separately through CloudFormation. See
 [AWS deployment and operations](docs/aws-deployment.md) for setup, release, and recovery.
-
-## Local Python reference implementation
-
-The Python API under `app/` remains available for local development and contract tests. It is
-not a hosted deployment target. Hosted requests go through API Gateway to the Deno API container
-on EC2.
-
-Run the reference service locally:
-
-```bash
-cp config/env/python-local.env.example .env.local
-uv sync --all-groups
-uv run uvicorn app.main:app --reload --env-file .env.local
-```
 
 ## Validate the repository
 
