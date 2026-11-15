@@ -531,7 +531,7 @@ components:
     SourceStep:
       type: object
       required: [ordinal, instruction]
-      description: Generated and refined steps include proposed checks. Older saved plans can omit them. The user must review suggestions and resolve open questions.
+      description: Generated and refined steps include proposed checks. Older saved plans can omit them. Open questions block approval unless the review explicitly classifies their exact text as optional.
       properties:
         ordinal: { type: integer, minimum: 1 }
         instruction: { type: string }
@@ -539,7 +539,8 @@ components:
         postchecks: { type: array, maxItems: 3, items: { type: string, maxLength: 240 }, description: Checks to perform after the action. }
         acceptanceCriteria: { type: array, maxItems: 3, items: { type: string, maxLength: 240 }, description: Observable indications that the action succeeded. }
         safetyNotes: { type: array, maxItems: 3, items: { type: string, maxLength: 240 }, description: Relevant suggested precautions. }
-        openQuestions: { type: array, maxItems: 3, items: { type: string, maxLength: 240 }, description: Missing information to resolve through refinement before approval. }
+        openQuestions: { type: array, maxItems: 3, items: { type: string, maxLength: 240 }, description: Proposed missing information. Blocks approval unless the review identifies the same question as optional. }
+        optionalQuestions: { type: array, maxItems: 3, items: { type: string, maxLength: 240 }, description: Nonessential choices that can remain unanswered or be considered during the task. }
     TaskPlanSummary:
       type: object
       required: [taskPlanId, title, status, isOwner, currentVersion, approvedVersion, createdAt, updatedAt, expiresAt]
@@ -593,6 +594,7 @@ components:
         planSummary: { type: string }
         needsUserClarification: { type: boolean }
         clarificationQuestions: { type: array, items: { type: string } }
+        optionalQuestions: { type: array, maxItems: 20, items: { type: string, maxLength: 300 }, description: Nonblocking questions from the review. Older saved reviews can omit this field. }
         steps:
           type: array
           items:

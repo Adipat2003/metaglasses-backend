@@ -92,7 +92,7 @@ begin
         raise exception 'cross-user draft modification was allowed';
     end if;
     if app.refine_task_plan(draft_id, owner_id, 1, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaac5',
-        '[{"ordinal":1,"instruction":"Move it."}]', 'Change it', 'Changed') <> 'saved' then
+        '[{"ordinal":1,"instruction":"Move it.","openQuestions":[],"optionalQuestions":["Which color cup?"]}]', 'Change it', 'Changed') <> 'saved' then
         raise exception 'pairing-free refinement failed';
     end if;
     if app.save_task_plan_validation_for_version(draft_id, owner_id, 2,
@@ -132,10 +132,19 @@ begin
         raise exception 'another user pairing was usable';
     end if;
     if app.approve_task_plan_with_review(draft_id, owner_id, 2,
-        '{"approvalReady":true,"needsUserClarification":false,"approvalBlockers":[],"unsupportedClaims":[],"guidelineChecks":{"clarity":true,"completeness":true,"observability":true,"safety":true}}') <> 'approved' then
+        '{"approvalReady":true,"needsUserClarification":false,"clarificationQuestions":[],"optionalQuestions":["Which color cup?"],"approvalBlockers":[],"unsupportedClaims":[],"guidelineChecks":{"clarity":true,"completeness":true,"observability":true,"safety":true}}') <> 'approved' then
         raise exception 'pairing-free approval failed';
     end if;
     if app.task_plan_view(draft_id, other_id) is null then raise exception 'approved plan was not shared'; end if;
+    result := app.task_plan_view(draft_id, other_id);
+    if result->'sourceSteps'->0->'optionalQuestions'->>0 <> 'Which color cup?'
+        or result->'validation'->'optionalQuestions'->>0 <> 'Which color cup?' then
+        raise exception 'deferred optional question was not preserved';
+    end if;
+    if app.approve_task_plan_with_review('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3', other_id, 1,
+        '{"approvalReady":false,"needsUserClarification":true,"clarificationQuestions":["Which chemical?"],"optionalQuestions":[],"approvalBlockers":["Which chemical?"],"unsupportedClaims":[],"guidelineChecks":{"clarity":true,"completeness":false,"observability":true,"safety":false}}') <> 'guidelines_failed' then
+        raise exception 'required safety question was bypassed';
+    end if;
 end;
 $$;
 reset role;

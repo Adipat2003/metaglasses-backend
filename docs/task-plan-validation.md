@@ -32,14 +32,21 @@ A model cannot approve a plan. Calls use temperature zero, but separate model ca
 different outputs; saved results and idempotent retries use the persisted proposal.
 
 Generated and refined steps include the action in `instruction`, along with suggested prechecks,
-postchecks, acceptance criteria, safety notes, and unresolved questions. The user must review them;
+postchecks, acceptance criteria, safety notes, required `openQuestions`, and nonblocking
+`optionalQuestions`. The user must review them;
 they do not establish that a check has passed. Existing saved steps can lack these additive fields.
-Any step with an unresolved question blocks approval until the user refines it. Reviews map results
+A step's `openQuestions` entry blocks approval unless the reviewer explicitly places the same
+question in `optionalQuestions` and does not report it as a blocker. Optional questions may be
+left unanswered. Review `clarificationQuestions` are required, while review `optionalQuestions`
+are nonblocking. Reviews map results
 to source ordinals and use the backend's saved instructions, instead of relying on the model to copy
 them. Invalid model responses log a safe `model_failure_reason` alongside the request ID; no model
 output or user plan is logged. Longer outputs remain subject to model output and request time limits.
 In AWS, generation, refinement, validation, and approval review each allow up to 20 seconds for
-the model request, leaving room within the API Gateway request limit for other processing.
+the initial model request. Reviews with questions or blockers make an additional classification
+request with a seven-second timeout. This adds latency and model usage, and the total request can
+approach the API Gateway timeout. At most 30 distinct items are classified; items beyond that
+limit remain required. A classification failure fails the review safely and can be retried.
 Requests use Bedrock structured output with a fixed JSON schema, followed by backend checks for
 field bounds, step mapping, and approval rules. A new or expired schema can require Bedrock grammar
 compilation, which may exceed the request timeout. In that case the request fails safely and can be
