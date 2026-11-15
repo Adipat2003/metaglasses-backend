@@ -156,7 +156,7 @@ regenerates and checks the SDK, runs its tests and package privacy check, lints 
 AWS configuration, then runs Deno formatting, type-checking, and tests in one container. It also
 checks the database migration scripts. After successful CI on each push to `main`, the
 [SDK publish workflow](.github/workflows/publish-frontend-sdk.yml) regenerates, validates, and
-publishes a uniquely versioned SDK to npm with the `latest` tag. The
+publishes a unique stable patch version to npm with the `latest` tag. The
 [AWS deployment workflow](.github/workflows/aws-deploy.yml) deploys merged `main` commits using
 GitHub OIDC and SSM, applies pending RDS migrations, then checks the service health endpoint.
 

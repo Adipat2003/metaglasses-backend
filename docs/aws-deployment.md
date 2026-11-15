@@ -119,8 +119,8 @@ The workflow needs the GitHub repository variable `METAGLASSES_AWS_DEPLOY_ROLE_A
 
 SDK publishing is separate from the AWS API deployment. Each successful CI run for a push to
 `main` starts `publish-frontend-sdk.yml` for that exact commit. The workflow regenerates the
-OpenAPI types, runs the SDK checks, creates a unique version, checks the npm package contents, and
-publishes to npm's `latest` tag with GitHub OIDC and provenance. Follow
+OpenAPI types, runs the SDK checks, creates a unique stable patch version, checks the npm package
+contents, and publishes to npm's `latest` tag with GitHub OIDC and provenance. Follow
 [the SDK release guide](../frontend-sdk/RELEASING.md) for versioning and npm trusted publisher
 configuration.
 

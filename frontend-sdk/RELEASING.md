@@ -6,9 +6,10 @@ publishes with npm provenance using short-lived credentials from GitHub OIDC. It
 24.04 with Node.js 22.16.0 and npm 11.5.1.
 
 The checked-in `package.json` version supplies the major and minor version. The workflow uses the
-CI run number and attempt to create a unique version such as `0.1.123-main.1`, and publishes it to
-npm's `latest` dist-tag. Frontends using `npm install metaglasses-sdk` receive the newest publish.
-Pinned frontend dependencies update only when the frontend chooses to install or upgrade the SDK.
+CI run number as the patch version, creating a unique stable version such as `0.1.123`, and
+publishes it to npm's `latest` dist-tag. Frontends using `npm install metaglasses-sdk` receive the
+newest publish. Pinned frontend dependencies update only when the frontend chooses to install or
+upgrade the SDK.
 
 The initial public package, `metaglasses-sdk@0.1.0`, is published. The one-time bootstrap is
 included below for recovery or a future package rename. npm requires the package to exist before

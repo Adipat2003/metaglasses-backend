@@ -50,17 +50,30 @@ jobs:
       - name: Set unique main build version
         env:
           CI_RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
-          CI_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        id: sdk_version
         run: |
           VERSION=$(node -e '
             const [major, minor, patch] = require("./frontend-sdk/package.json").version.split(".");
             if (![major, minor, patch].every((part) => /^\d+$/.test(part))) {
               throw new Error("frontend-sdk/package.json must use a stable major.minor.patch version");
             }
-            console.log(`${major}.${minor}.${process.env.CI_RUN_NUMBER}-main.${process.env.CI_RUN_ATTEMPT}`);
+            console.log(`${major}.${minor}.${process.env.CI_RUN_NUMBER}`);
           ')
           npm version "$VERSION" --no-git-tag-version --prefix frontend-sdk
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether this version was already published
+        id: published
+        env:
+          VERSION: ${{ steps.sdk_version.outputs.value }}
+        run: |
+          if npm view "metaglasses-sdk@$VERSION" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Publish public package with provenance
+        if: steps.published.outputs.exists != 'true'
         working-directory: frontend-sdk
         run: npm publish --access public --provenance --tag latest
