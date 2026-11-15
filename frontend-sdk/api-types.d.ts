@@ -271,10 +271,11 @@ export interface paths {
         put?: never;
         /**
          * Start an approved plan on the caller's active pairing
-         * @description Requires a Cognito access token, an approved and validated plan, and an active pairing
-         *     owned by the caller. Supply pairingToken when selecting any shared plan. Reuse the same
-         *     clientRequestId and payload after an uncertain result. At most one active or paused run
-         *     can exist for a plan version.
+         * @description Requires a Cognito access token and an approved, validated plan. When supplied, pairingToken
+         *     must identify an active pairing owned by the caller. Omitting it retains legacy behavior
+         *     using the plan creator's original active pairing; new clients should always supply the
+         *     caller's active pairing when selecting a shared plan. Reuse the same clientRequestId and
+         *     payload after an uncertain result. At most one active or paused run can exist per plan version.
          */
         post: operations["startTaskRun"];
         delete?: never;
@@ -462,7 +463,7 @@ export interface components {
             region: string;
             model: string;
         };
-        /** @description Generated and refined steps include proposed checks. Older saved plans can omit them. The user must review suggestions and resolve open questions. */
+        /** @description Generated and refined steps include proposed checks. Older saved plans can omit them. Open questions block approval unless the review explicitly classifies their exact text as optional. */
         SourceStep: {
             ordinal: number;
             instruction: string;
@@ -474,8 +475,10 @@ export interface components {
             acceptanceCriteria?: string[];
             /** @description Relevant suggested precautions. */
             safetyNotes?: string[];
-            /** @description Missing information to resolve through refinement before approval. */
+            /** @description Proposed missing information. Blocks approval unless the review identifies the same question as optional. */
             openQuestions?: string[];
+            /** @description Nonessential choices that can remain unanswered or be considered during the task. */
+            optionalQuestions?: string[];
         };
         TaskPlanSummary: {
             /** Format: uuid */
@@ -531,6 +534,8 @@ export interface components {
             planSummary: string;
             needsUserClarification: boolean;
             clarificationQuestions: string[];
+            /** @description Nonblocking questions from the review. Older saved reviews can omit this field. */
+            optionalQuestions?: string[];
             steps: {
                 sourceStepOrdinal: number;
                 canonicalInstruction: string;
@@ -1019,7 +1024,7 @@ export interface operations {
                     taskPlanId: string;
                     /** Format: uuid */
                     clientRequestId: string;
-                    /** @description Optional for legacy API callers. New clients should supply the caller's active pairing. */
+                    /** @description Optional for legacy API callers. When omitted, the plan creator's original active pairing is used. New clients should supply the caller's active pairing. */
                     pairingToken?: components["schemas"]["PairingToken"];
                 };
             };

@@ -19,7 +19,8 @@ blocker for every failed category.
 ### Completeness
 
 - The supplied steps contain enough information to carry out the user's requested task.
-- Any missing choice that materially changes the task is raised as a clarification question.
+- Missing information needed for safe execution or the requested action is a clarification question.
+- Preferences and choices that can be made later are optional and do not block approval.
 - The reviewer does not invent facts, tools, prerequisites, or extra operational steps to fill gaps.
 
 ### Visual observability
@@ -39,14 +40,19 @@ blocker for every failed category.
 ### Grounding and questions
 
 - Unsupported claims block approval until removed or resolved.
-- Any unresolved clarification question blocks approval.
+- Draft `openQuestions` block approval unless the review explicitly copies the same question into
+  `optionalQuestions` and does not also report it as required or as a blocker. Review
+  `clarificationQuestions` always block approval.
+- Step and review `optionalQuestions` are informational and may remain unanswered.
+- An unknown answer is not a fact. A user request to defer an essential safety detail does not
+  remove that requirement.
 - The reviewer distinguishes evidence in the plan from assumptions about the user's environment.
 
 ## Backend enforcement
 
 The model cannot approve a plan. The API validates the review schema and derives
 `approvalReady`; it does not trust a model-supplied readiness flag. Approval is blocked if any
-guideline fails, a clarification remains open, a step has no visual acceptance criteria, an
+guideline fails, a required clarification remains open, a step has no visual acceptance criteria, an
 unsupported claim remains, or a high-risk step lacks explicit confirmation.
 
 The database saves the review and changes the plan to `approved` in one transaction only when:
@@ -54,7 +60,11 @@ The database saves the review and changes the plan to `approved` in one transact
 - the reviewed version is still the current version;
 - the plan remains eligible for approval and has no task run;
 - all four guideline checks pass;
-- there are no approval blockers, unsupported claims, or clarification questions.
+- there are no approval blockers, unsupported claims, or required clarification questions.
+
+The model's classification can be wrong. The user must review the plan and its safety notes;
+an optional label is not proof that an unknown detail is safe. Older `openQuestions` are
+re-evaluated during each review and can also be changed through refinement.
 
 If the review fails, the database saves it on the current version and leaves the plan editable as a
 draft. The API returns `409 task_plan_guidelines_failed`. A `GET /v1/task-plans/{taskPlanId}`
