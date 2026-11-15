@@ -1,28 +1,15 @@
 # Local development and validation
 
-The hosted API is the Deno service on AWS. Its source is under `backend/`. It requires Cognito, RDS, S3, and AWS credentials and is not reproduced by the
-old Supabase local stack. Do not use the Python reference service as a substitute for hosted API
-contract testing.
+The hosted API is the Deno service on AWS, with source under `backend/`. It requires Cognito,
+RDS, S3, and AWS credentials. The repository does not provide a fully local AWS stack.
 
 ## Prerequisites
 
-- Python 3.12 and `uv` for the reference app and repository configuration tests.
+- Python 3.12 and `uv` for repository configuration tests.
 - Docker for the pinned Deno 2.5.2 checks and application image build.
 - An AWS environment, Cognito test account, and access token for the optional integration smoke test.
 
-Install the locked Python environment with `uv sync --locked --all-groups`.
-
-## Local Python reference
-
-```bash
-cp config/env/python-local.env.example .env.local
-uv run uvicorn app.main:app --reload --env-file .env.local
-curl --fail http://127.0.0.1:8000/healthz
-```
-
-This local service runs without authentication, stores pairing state in process memory, and loses it
-when restarted. Add a development NVIDIA credential to the ignored `.env.local` only when testing
-model requests. It is not a deployment target and does not implement every hosted feature.
+Install the locked test environment with `uv sync --locked --all-groups`.
 
 ## Validation
 
@@ -68,6 +55,7 @@ bash scripts/smoke-task-guidance-api.sh
 The test attempts to stop the run and delete its image on exit, but audit records remain. A pass
 ends with `Task-guidance smoke test passed.` Do not run it against another user's pairing.
 
-The [frontend handoff](backend-frontend-handoff.md) documents authentication, endpoint contracts,
-limits, and client flows. The [canonical Postman repository](https://github.com/Adipat2003/metaglasses-postman)
+The generated [frontend SDK](../frontend-sdk/README.md) provides typed endpoint definitions and a
+fetch client. The [frontend handoff](backend-frontend-handoff.md) documents authentication, limits,
+and client flows. The [canonical Postman repository](https://github.com/Adipat2003/metaglasses-postman)
 contains reusable requests and environment templates.

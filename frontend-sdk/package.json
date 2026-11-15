@@ -1,0 +1,32 @@
+{
+  "name": "metaglasses-sdk",
+  "version": "0.1.0",
+  "description": "Typed frontend client for the MetaGlasses API",
+  "type": "module",
+  "types": "./dist/client.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Adipat2003/metaglasses-backend.git",
+    "directory": "frontend-sdk"
+  },
+  "scripts": {
+    "generate": "bash ../scripts/generate-frontend-sdk.sh",
+    "build": "node ../scripts/build-frontend-sdk.mjs",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}

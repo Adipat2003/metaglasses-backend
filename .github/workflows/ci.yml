@@ -23,6 +23,21 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.16.0"
+
+      - name: Install frontend SDK tooling
+        run: npm ci --prefix frontend-sdk
+
+      - name: Check generated frontend SDK
+        run: |
+          npm run generate --prefix frontend-sdk
+          git diff --exit-code -- frontend-sdk/api-types.d.ts
+          npm test --prefix frontend-sdk
+          node scripts/check-frontend-sdk-package.mjs
+
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -44,11 +59,12 @@ jobs:
       - name: Test
         run: uv run python -m pytest
 
-      - name: Check Edge Functions
+      - name: Check AWS backend
         run: |
           docker run --rm --volume "$PWD:/work" --workdir /work \
             denoland/deno:2.5.2 deno fmt --config backend/deno.json \
-            --check backend
+            --check backend frontend-sdk/client.ts scripts/build-frontend-sdk.mjs \
+            scripts/check-frontend-sdk-package.mjs
           docker run --rm --volume "$PWD:/work" --workdir /work \
             denoland/deno:2.5.2 deno check --config backend/deno.json \
             backend/api/index.ts \

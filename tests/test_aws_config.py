@@ -1,5 +1,4 @@
 import re
-import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -9,14 +8,9 @@ def test_environment_templates_are_centralized() -> None:
     template_directory = ROOT / "config" / "env"
     assert sorted(path.name for path in template_directory.glob("*.env.example")) == [
         "edge-functions.env.example",
-        "oauth.env.example",
-        "python-authenticated.env.example",
-        "python-docker.env.example",
-        "python-local.env.example",
     ]
     assert not list(ROOT.glob(".env*.example"))
     assert not (ROOT / "backend" / ".env.example").exists()
-    assert not (ROOT / "supabase" / "oauth.env.example").exists()
 
 
 def test_aws_runtime_template_has_one_pairing_image_bucket() -> None:
@@ -27,31 +21,11 @@ def test_aws_runtime_template_has_one_pairing_image_bucket() -> None:
     assert template.count("PAIRING_IMAGE_BUCKET=") == 1
 
 
-def test_local_supabase_enables_google_and_apple_with_environment_credentials() -> None:
-    config_path = ROOT / "supabase" / "config.toml"
-    config = tomllib.loads(config_path.read_text(encoding="utf-8"))
-
-    assert config["auth"]["additional_redirect_urls"] == ["glance-local://auth/callback"]
-
-    google = config["auth"]["external"]["google"]
-    assert google["enabled"] is True
-    assert google["client_id"] == "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"
-    assert google["secret"] == "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET)"
-
-    apple = config["auth"]["external"]["apple"]
-    assert apple["enabled"] is True
-    assert apple["client_id"] == "env(SUPABASE_AUTH_EXTERNAL_APPLE_CLIENT_ID)"
-    assert apple["secret"] == "env(SUPABASE_AUTH_EXTERNAL_APPLE_SECRET)"
-    assert apple["redirect_uri"] == "env(SUPABASE_AUTH_EXTERNAL_APPLE_REDIRECT_URI)"
-
-
 def test_api_uses_cognito_authentication_and_permissive_cors() -> None:
-    config = tomllib.loads((ROOT / "supabase" / "config.toml").read_text(encoding="utf-8"))
     source = (ROOT / "backend" / "api" / "index.ts").read_text(
         encoding="utf-8"
     )
 
-    assert config["functions"]["api"]["verify_jwt"] is False
     assert '"Access-Control-Allow-Origin": "*"' in source
     assert 'CognitoJwtVerifier.create' in source
     assert 'tokenUse: "access"' in source
@@ -80,42 +54,13 @@ def test_edge_api_supports_stateless_byok_without_system_injection() -> None:
     assert "apiKey" not in request_log_source
 
 
-def test_edge_api_database_functions_are_service_role_only() -> None:
-    migration = (
-        ROOT / "supabase" / "migrations" / "20260909032038_add_edge_api_rpcs.sql"
-    ).read_text(encoding="utf-8")
-    function_names = {
-        "edge_api_set_state",
-        "edge_api_save_response",
-        "edge_api_get_display",
-        "edge_api_pairing_access",
-        "edge_api_register_image",
-        "edge_api_get_images",
-        "edge_api_remove_image",
-    }
-
-    for function_name in function_names:
-        assert f"function public.{function_name}" in migration
-        assert f"grant execute on function public.{function_name}" in migration
-    assert migration.count("security definer") == len(function_names)
-    assert migration.count("from public, anon, authenticated") == len(function_names)
-
-
 def test_hosted_edge_api_does_not_limit_images_per_pairing() -> None:
     source = (ROOT / "backend" / "api" / "index.ts").read_text(
         encoding="utf-8"
     )
-    migration = (
-        ROOT
-        / "supabase"
-        / "migrations"
-        / "20260929030609_remove_pairing_image_limit.sql"
-    ).read_text(encoding="utf-8")
-
     assert "maxImagesPerPairing" not in source
     assert "p_max_images: null" in source
-    assert "active_image_count" not in migration
-    assert "return 'registered';" in migration
+
 
 
 def test_cd_deploys_to_ec2_through_oidc_and_ssm() -> None:
