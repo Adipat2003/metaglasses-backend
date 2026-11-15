@@ -1,10 +1,14 @@
 # Releasing
 
-The package is built and checked in CI. Publish a GitHub release from the commit that contains
-the matching package version and use `v<version>` as its tag. The publish workflow regenerates
-the endpoint types, runs the SDK checks, verifies the package contents, checks the release tag
-against `package.json`, then publishes with npm provenance. It runs on Ubuntu 24.04, uses Node.js
-22.16.0 and npm 11.5.1, and receives short-lived publish credentials from GitHub OIDC.
+Every successful CI run for a push to `main` triggers an npm publish for that exact commit. The
+workflow regenerates the endpoint types, runs the SDK checks, verifies package contents, then
+publishes with npm provenance using short-lived credentials from GitHub OIDC. It runs on Ubuntu
+24.04 with Node.js 22.16.0 and npm 11.5.1.
+
+The checked-in `package.json` version supplies the major and minor version. The workflow uses the
+CI run number and attempt to create a unique version such as `0.1.123-main.1`, and publishes it to
+npm's `latest` dist-tag. Frontends using `npm install metaglasses-sdk` receive the newest publish.
+Pinned frontend dependencies update only when the frontend chooses to install or upgrade the SDK.
 
 The initial public package, `metaglasses-sdk@0.1.0`, is published. The one-time bootstrap is
 included below for recovery or a future package rename. npm requires the package to exist before
@@ -33,7 +37,7 @@ Then, in the npm package settings, add a GitHub Actions trusted publisher with:
 - Environment name: leave blank
 - Allowed action: direct `npm publish`
 
-After that setup, all later publishes use short-lived GitHub OIDC credentials. No npm token is
-stored in GitHub. npm requires the first successful trusted publish within two days of configuring
-the publisher. Publish future versions by updating `package.json` and `package-lock.json`, then
-creating a release with a matching `v<version>` tag.
+After that setup, publishes use short-lived GitHub OIDC credentials. No npm token is stored in
+GitHub. npm requires the first successful trusted publish within two days of configuring the
+publisher. Update the major or minor version in `package.json` when intentionally changing the
+SDK's compatibility line. Every successful push to `main` then produces a unique npm version.

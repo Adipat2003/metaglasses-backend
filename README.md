@@ -154,9 +154,9 @@ smoke test.
 The [CI workflow](.github/workflows/ci.yml) runs on Ubuntu 24.04 with SHA-pinned actions. It
 regenerates and checks the SDK, runs its tests and package privacy check, lints and tests the Python
 AWS configuration, then runs Deno formatting, type-checking, and tests in one container. It also
-checks the database migration scripts. The
-[SDK release workflow](.github/workflows/publish-frontend-sdk.yml) validates and publishes a
-matching package version from a GitHub release. The
+checks the database migration scripts. After successful CI on each push to `main`, the
+[SDK publish workflow](.github/workflows/publish-frontend-sdk.yml) regenerates, validates, and
+publishes a uniquely versioned SDK to npm with the `latest` tag. The
 [AWS deployment workflow](.github/workflows/aws-deploy.yml) deploys merged `main` commits using
 GitHub OIDC and SSM, applies pending RDS migrations, then checks the service health endpoint.
 
