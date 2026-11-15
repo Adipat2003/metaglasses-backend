@@ -5,10 +5,13 @@ This handoff describes the checked-in AWS backend. The routed Deno service is in
 are in [`database/migrations/`](../database/migrations/). Verify the target environment and deployed
 revision with its operator before release. The hosted runtime uses AWS Cognito, RDS, S3, and Bedrock.
 
-The API base URL is `https://xay03orwv0.execute-api.us-east-1.amazonaws.com`. On 2026-11-11,
-the public health endpoint returned `ok` and the deployment workflow reported success for backend
-commit `ffc51bdb0e32e154045180d0f1ad19c9e92e88d0`. This is a point-in-time check, not a guarantee
-of later availability. The complete machine-readable contract is [api-openapi.yaml](api-openapi.yaml).
+The API base URL is `https://xay03orwv0.execute-api.us-east-1.amazonaws.com`. On 2026-11-15, the
+public health endpoint returned `ok`, and [deployment run 43674302367](https://github.com/Adipat2003/metaglasses-backend/actions/runs/43674302367)
+completed successfully for backend commit `c502860714b2fa4b314dac0c429caf1cec3b4096`. This is
+a point-in-time check, not a guarantee of later availability. Confirm the current base URL and
+deployed revision before integration.
+The complete machine-readable contract is [api-openapi.yaml](api-openapi.yaml). TypeScript clients
+should prefer the [frontend SDK](../frontend-sdk/README.md) for named calls and typed contracts.
 
 ## Frontend authentication configuration
 
@@ -59,8 +62,6 @@ Do not embed server credentials or a confidential client secret in the app.
 4. The phone uploads optional camera images and sends a conversation to chat. The API calls a model and saves the most recent display response. The client owns conversation history.
 5. For guided tasks, the phone creates and reviews a plan, obtains explicit user approval, starts a run, and sends user commands and optional frame windows. The backend publishes instructions to the same lens display.
 6. The Deno service uses private PostgreSQL functions for data, private S3 objects for images, NVIDIA for managed chat, and Bedrock for plan review and visual observation. The cleanup worker removes expired images. See [AWS operations](aws-deployment.md) for infrastructure and recovery.
-
-The Python app in `app/` is a local reference, not the hosted API contract. Historical Supabase migrations remain for audit history and are not used by the AWS runtime.
 
 ## Shared HTTP conventions
 
@@ -486,11 +487,19 @@ non-transient failures. Do not silently retry a user confirmation after a state 
 
 ## Setup, operations, and verification
 
-For the AWS path, read [AWS deployment and operations](aws-deployment.md), [infrastructure](../infrastructure/), the [deployment workflow](../.github/workflows/aws-deploy.yml), and [environment template](../config/env/edge-functions.env.example). The template lists `APP_ENV`, `AWS_REGION`, Cognito pool and client IDs, database host/port/name, image bucket, NVIDIA secret ARN, and optional model settings. Provisioning also needs IAM roles, private network connectivity, RDS schema and migration role, S3, model access, Secrets Manager, and the cleanup schedule as described in the deployment guide. Secrets and server IAM credentials stay server-side. `NVIDIA_API_KEY` can alternatively be supplied directly to the process when a secret ARN is not used. Do not copy a populated environment file into Git or a frontend bundle.
+For the AWS path, read [AWS deployment and operations](aws-deployment.md),
+[infrastructure](../infrastructure/), the
+[deployment workflow](../.github/workflows/aws-deploy.yml), and
+[environment template](../config/env/edge-functions.env.example). The template lists
+`APP_ENV`, `AWS_REGION`, Cognito pool and client IDs, database host/port/name, image bucket,
+NVIDIA secret ARN, and optional model settings. Provisioning also needs IAM roles, private network
+connectivity, RDS schema and migration role, S3, model access, Secrets Manager, and the cleanup
+schedule as described in the deployment guide. Secrets and server IAM credentials stay server-side.
+`NVIDIA_API_KEY` can alternatively be supplied directly to the process when a secret ARN is not
+used. Do not copy a populated environment file into Git or a frontend bundle.
 
 For local work, prerequisites and commands are in [local development](local-development.md). The
-Python reference is useful for its own tests, but its auth, persistence, and feature parity must not
-be assumed to match the Deno AWS service. The repository does not provide a fully local AWS stack.
+repository does not provide a fully local AWS stack.
 
 Repository checks and pinned Deno commands are listed in [local development](local-development.md). The canonical request collection is the separate [MetaGlasses Postman repository](https://github.com/Adipat2003/metaglasses-postman). Verify its revision matches the deployed backend before treating it as the live contract. The dedicated `scripts/smoke-task-guidance-api.sh` exercises Cognito, pairing, plan review, run, image, observation, and stop against a configured environment. It requires a dedicated test account and pairing, incurs model calls, changes the display, and creates audit records; read the script before running it. Use request IDs and structured logs for diagnosis. Confirm deployment and recovery using the operational guide rather than assuming a successful code push deployed the change.
 

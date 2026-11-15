@@ -1,5 +1,7 @@
 # MetaGlasses backend
 
+[![CI](https://github.com/Adipat2003/metaglasses-backend/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Adipat2003/metaglasses-backend/actions/workflows/ci.yml)
+
 The hosted MetaGlasses API runs as a single routed HTTP service on AWS. Its Deno source remains
 under `backend/`. AWS EC2 is the application runtime;
 Cognito, RDS, and S3 provide authentication, data, and image storage.
@@ -10,29 +12,17 @@ Cognito, RDS, and S3 provide authentication, data, and image storage.
 | --- | --- | --- |
 | AWS single environment | `https://xay03orwv0.execute-api.us-east-1.amazonaws.com` | Private S3 bucket from `metaglasses-storage` |
 
-Append the existing route to the environment base URL:
+The complete machine-readable route contract is in [OpenAPI](docs/api-openapi.yaml). TypeScript
+frontends should use the [published SDK](frontend-sdk/README.md), which exposes named functions
+and requires the app to supply its API base URL at runtime.
 
-- `GET /healthz`
-- `POST /v1/state`
-- `GET /v1/display`
-- `POST /v1/chat`
-- `POST /v1/images`
-- `DELETE /v1/images/{image_id}`
-- `POST /v1/task-plans`
-- `GET /v1/task-plans`
-- `GET /v1/task-plans/{task_plan_id}`
-- `POST /v1/task-plans/{task_plan_id}/refine`
-- `POST /v1/task-plans/{task_plan_id}/validate`
-- `POST /v1/task-plans/{task_plan_id}/approve`
-- `POST /v1/task-runs`
-- `GET /v1/task-runs/{task_run_id}`
-- `POST /v1/task-runs/{task_run_id}/commands`
-- `POST /v1/task-runs/{task_run_id}/inference-windows`
-- `POST /v1/task-runs/{task_run_id}/stop`
+```bash
+npm install metaglasses-sdk
+```
 
 Phone routes require a Cognito user access token in `Authorization: Bearer <token>`. The
-lens display route uses the random pairing token as its capability credential. The Edge API
-returns permissive CORS headers. CORS does not replace authentication or pairing ownership
+lens display route uses the random pairing token as its capability credential. The API returns
+permissive CORS headers. CORS does not replace authentication or pairing ownership
 enforcement.
 
 Task guidance uses GLM 4.7 Flash to generate an initial plan from the supplied steps, refine it,
@@ -161,8 +151,18 @@ smoke test.
 
 ## CI and deployment
 
-CI validates the TypeScript API and AWS database and infrastructure configuration. After a push to `main`, `aws-deploy.yml` builds and deploys the API container to AWS using
-GitHub OIDC and SSM, and applies pending RDS migrations before restarting the service.
+The [CI workflow](.github/workflows/ci.yml) runs on Ubuntu 24.04 with SHA-pinned actions. It
+regenerates and checks the SDK, runs its tests and package privacy check, lints and tests the Python
+AWS configuration, then runs Deno formatting, type-checking, and tests in one container. It also
+checks the database migration scripts. After successful CI on each push to `main`, the
+[SDK publish workflow](.github/workflows/publish-frontend-sdk.yml) regenerates, validates, and
+publishes a unique stable patch version to npm with the `latest` tag. The
+[AWS deployment workflow](.github/workflows/aws-deploy.yml) deploys merged `main` commits using
+GitHub OIDC and SSM, applies pending RDS migrations, then checks the service health endpoint.
+
+When the Postman sync GitHub App is configured, a successful `CI` run for a push to `main`
+dispatches that exact backend revision to the canonical Postman repository. See
+[the Postman sync workflow](.github/workflows/notify-postman-contract.yml).
 
 AWS infrastructure is managed separately through CloudFormation. See
 [AWS deployment and operations](docs/aws-deployment.md) for setup, release, and recovery.

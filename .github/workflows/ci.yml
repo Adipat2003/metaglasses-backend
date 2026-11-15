@@ -16,7 +16,7 @@ concurrency:
 jobs:
   validate:
     name: Validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22.16.0"
 
@@ -62,21 +62,21 @@ jobs:
       - name: Check AWS backend
         run: |
           docker run --rm --volume "$PWD:/work" --workdir /work \
-            denoland/deno:2.5.2 deno fmt --config backend/deno.json \
-            --check backend frontend-sdk/client.ts scripts/build-frontend-sdk.mjs \
-            scripts/check-frontend-sdk-package.mjs
-          docker run --rm --volume "$PWD:/work" --workdir /work \
-            denoland/deno:2.5.2 deno check --config backend/deno.json \
-            backend/api/index.ts \
-            backend/cleanup-pairing-images/index.ts
-          docker run --rm --volume "$PWD:/work" --workdir /work \
-            denoland/deno:2.5.2 deno test --allow-env --allow-read --config backend/deno.json \
-            backend/api/errors_test.ts \
-            backend/api/index_test.ts \
-            backend/api/cognito_clients_test.ts \
-            backend/api/nvidia_test.ts \
-            backend/api/providers_test.ts \
-            backend/api/task_plan_test.ts \
-            backend/api/task_plan_create_test.ts
+            --entrypoint sh denoland/deno:2.5.2 -eu -c '
+              deno fmt --config backend/deno.json \
+                --check backend frontend-sdk/client.ts scripts/build-frontend-sdk.mjs \
+                scripts/check-frontend-sdk-package.mjs
+              deno check --config backend/deno.json \
+                backend/api/index.ts \
+                backend/cleanup-pairing-images/index.ts
+              deno test --allow-env --allow-read --config backend/deno.json \
+                backend/api/errors_test.ts \
+                backend/api/index_test.ts \
+                backend/api/cognito_clients_test.ts \
+                backend/api/nvidia_test.ts \
+                backend/api/providers_test.ts \
+                backend/api/task_plan_test.ts \
+                backend/api/task_plan_create_test.ts
+            '
           bash -n scripts/smoke-task-guidance-api.sh
           bash scripts/test-task-plan-library-db.sh

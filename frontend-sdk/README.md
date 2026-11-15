@@ -3,6 +3,10 @@
 The API origin is supplied by the app at runtime. The SDK has no baked-in backend address and
 does not read environment variables or persist credentials.
 
+```bash
+npm install metaglasses-sdk
+```
+
 ```ts
 import { createClient, ApiRequestError, SdkValidationError } from "metaglasses-sdk";
 

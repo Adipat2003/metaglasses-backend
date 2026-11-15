@@ -101,7 +101,8 @@ extensions.
 
 Pushing a merged commit to `main` triggers `.github/workflows/aws-deploy.yml`.
 
-1. GitHub Actions assumes the AWS deploy role through OIDC. No static AWS key is stored in GitHub.
+1. The GitHub-hosted Ubuntu 24.04 runner uses SHA-pinned actions and assumes the AWS deploy role
+   through OIDC. No static AWS key is stored in GitHub.
 2. The workflow builds the Deno container and pushes an immutable commit-SHA tag to ECR.
 3. It sends an SSM command to EC2 to pull the image and apply unapplied migrations as the separate
    IAM-authenticated migrator role. A migration failure leaves the previous API container running.
@@ -113,6 +114,15 @@ Pushing a merged commit to `main` triggers `.github/workflows/aws-deploy.yml`.
 
 The workflow needs the GitHub repository variable `METAGLASSES_AWS_DEPLOY_ROLE_ARN`, set to the
 `GitHubDeployRoleArn` output of `metaglasses-compute`.
+
+## Publish the frontend SDK
+
+SDK publishing is separate from the AWS API deployment. Each successful CI run for a push to
+`main` starts `publish-frontend-sdk.yml` for that exact commit. The workflow regenerates the
+OpenAPI types, runs the SDK checks, creates a unique stable patch version, checks the npm package
+contents, and publishes to npm's `latest` tag with GitHub OIDC and provenance. Follow
+[the SDK release guide](../frontend-sdk/RELEASING.md) for versioning and npm trusted publisher
+configuration.
 
 ## Task-plan retention
 
