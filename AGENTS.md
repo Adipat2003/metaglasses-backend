@@ -11,6 +11,7 @@ Use this map before searching the repository:
 | AWS database schema and functions | `database/migrations/` |
 | Cleanup worker | `backend/cleanup-pairing-images/index.ts` |
 | AWS configuration tests | `tests/` |
+| Frontend SDK contract | `docs/api-openapi.yaml` and `frontend-sdk/client.ts` |
 | Environment templates | `config/env/` |
 | Canonical Postman collection and environments | `Adipat2003/metaglasses-postman` |
 | Local setup, deployment, and security | `docs/` |
@@ -39,6 +40,10 @@ documentation in the same change.
 - `uv sync --locked --all-groups`: install the Python 3.12 test environment.
 - `uv run ruff check .`: lint Python.
 - `uv run python -m pytest`: run AWS configuration tests.
+- `npm ci --prefix frontend-sdk`: install the locked SDK generator and TypeScript compiler.
+- `npm run generate --prefix frontend-sdk`: regenerate SDK contract types from OpenAPI.
+- `npm test --prefix frontend-sdk`: build the SDK and run its client tests.
+- `node scripts/check-frontend-sdk-package.mjs`: verify the published tarball contents.
 - `bash scripts/smoke-task-guidance-api.sh`: run the guarded AWS integration smoke test with a dedicated test user and pairing.
 
 Run the pinned Deno formatting, type-checking, and test commands from

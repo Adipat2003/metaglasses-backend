@@ -5,9 +5,13 @@ RDS, S3, and AWS credentials. The repository does not provide a fully local AWS 
 
 ## Prerequisites
 
+- Node.js 22.16.0 and npm for SDK generation and validation.
 - Python 3.12 and `uv` for repository configuration tests.
 - Docker for the pinned Deno 2.5.2 checks and application image build.
 - An AWS environment, Cognito test account, and access token for the optional integration smoke test.
+
+GitHub Actions use Ubuntu 24.04 and SHA-pinned actions. CI uses the Node.js and Python versions
+above and runs Deno formatting, checking, and tests in one pinned Deno container.
 
 Install the locked test environment with `uv sync --locked --all-groups`.
 
@@ -16,20 +20,26 @@ Install the locked test environment with `uv sync --locked --all-groups`.
 Run the same checks as CI:
 
 ```bash
+npm ci --prefix frontend-sdk
+npm run generate --prefix frontend-sdk
+git diff --exit-code -- frontend-sdk/api-types.d.ts
+npm test --prefix frontend-sdk
+node scripts/check-frontend-sdk-package.mjs
 uv run ruff check .
 uv run python -m pytest
 docker run --rm --volume "$PWD:/work" --workdir /work \
-  denoland/deno:2.5.2 deno fmt --config backend/deno.json \
-  --check backend
-docker run --rm --volume "$PWD:/work" --workdir /work \
-  denoland/deno:2.5.2 deno check --config backend/deno.json \
-  backend/api/index.ts backend/cleanup-pairing-images/index.ts
-docker run --rm --volume "$PWD:/work" --workdir /work \
-  denoland/deno:2.5.2 deno test --allow-env --allow-read --config backend/deno.json \
-  backend/api/errors_test.ts backend/api/index_test.ts \
-  backend/api/cognito_clients_test.ts backend/api/nvidia_test.ts \
-  backend/api/providers_test.ts backend/api/task_plan_test.ts \
-  backend/api/task_plan_create_test.ts
+  --entrypoint sh denoland/deno:2.5.2 -eu -c '
+    deno fmt --config backend/deno.json \
+      --check backend frontend-sdk/client.ts scripts/build-frontend-sdk.mjs \
+      scripts/check-frontend-sdk-package.mjs
+    deno check --config backend/deno.json \
+      backend/api/index.ts backend/cleanup-pairing-images/index.ts
+    deno test --allow-env --allow-read --config backend/deno.json \
+      backend/api/errors_test.ts backend/api/index_test.ts \
+      backend/api/cognito_clients_test.ts backend/api/nvidia_test.ts \
+      backend/api/providers_test.ts backend/api/task_plan_test.ts \
+      backend/api/task_plan_create_test.ts
+  '
 bash -n scripts/smoke-task-guidance-api.sh
 bash scripts/test-task-plan-library-db.sh
 ```
@@ -55,7 +65,7 @@ bash scripts/smoke-task-guidance-api.sh
 The test attempts to stop the run and delete its image on exit, but audit records remain. A pass
 ends with `Task-guidance smoke test passed.` Do not run it against another user's pairing.
 
-The generated [frontend SDK](../frontend-sdk/README.md) provides typed endpoint definitions and a
-fetch client. The [frontend handoff](backend-frontend-handoff.md) documents authentication, limits,
-and client flows. The [canonical Postman repository](https://github.com/Adipat2003/metaglasses-postman)
+The [frontend SDK](../frontend-sdk/README.md) provides named calls with typed inputs and outputs.
+The [frontend handoff](backend-frontend-handoff.md) documents authentication, limits, and client
+flows. The [canonical Postman repository](https://github.com/Adipat2003/metaglasses-postman)
 contains reusable requests and environment templates.
