@@ -55,6 +55,7 @@ bash scripts/smoke-task-guidance-api.sh
 The test attempts to stop the run and delete its image on exit, but audit records remain. A pass
 ends with `Task-guidance smoke test passed.` Do not run it against another user's pairing.
 
-The [frontend handoff](backend-frontend-handoff.md) documents authentication, endpoint contracts,
-limits, and client flows. The [canonical Postman repository](https://github.com/Adipat2003/metaglasses-postman)
+The generated [frontend SDK](../frontend-sdk/README.md) provides typed endpoint definitions and a
+fetch client. The [frontend handoff](backend-frontend-handoff.md) documents authentication, limits,
+and client flows. The [canonical Postman repository](https://github.com/Adipat2003/metaglasses-postman)
 contains reusable requests and environment templates.
