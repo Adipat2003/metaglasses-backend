@@ -25,6 +25,7 @@ function validModelPlan(): Record<string, unknown> {
     planSummary: "Install a bracket in two steps.",
     needsUserClarification: false,
     clarificationQuestions: [],
+    optionalQuestions: [],
     steps: sourcePlan.steps.map((step) => ({
       sourceStepOrdinal: step.ordinal,
       canonicalInstruction: step.instruction,
@@ -61,6 +62,7 @@ function detailedStep(instruction: string) {
     acceptanceCriteria: ["The bracket is in position."],
     safetyNotes: [],
     openQuestions: [],
+    optionalQuestions: [],
   };
 }
 
@@ -238,6 +240,48 @@ Deno.test("initial generation rejects changed or missing actions", async () => {
   }
 });
 
+Deno.test("refinement preserves an unanswered optional choice without inventing an answer", async () => {
+  const originalFetch = globalThis.fetch;
+  let prompt = "";
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body));
+    prompt = request.system[0].text + request.messages[0].content[0].text;
+    return Response.json({
+      output: {
+        message: {
+          content: [{
+            text: JSON.stringify({
+              changeSummary: "The optional choice remains undecided.",
+              steps: [{ ...detailedStep("Add milk."), optionalQuestions: ["Which milk?"] }],
+            }),
+          }],
+        },
+      },
+    });
+  };
+  try {
+    const plan = validateTaskPlanInput({
+      title: "Smoothie",
+      steps: [{ instruction: "Add milk.", openQuestions: ["Which milk?"] }],
+    });
+    const result = await refineTaskPlanWithModel(
+      "us-east-1",
+      { accessKeyId: "test-key", secretAccessKey: "test-secret" },
+      plan,
+      [],
+      "I don't know which milk; leave it undecided if optional.",
+      null,
+    );
+    assert(result.steps[0].instruction === "Add milk.");
+    assert(result.steps[0].openQuestions?.length === 0);
+    assert(result.steps[0].optionalQuestions?.[0] === "Which milk?");
+    assert(prompt.includes("Never move a safety-critical"));
+    assert(prompt.includes("I don't know which milk"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("approval review uses stricter explicit guidelines", async () => {
   const originalFetch = globalThis.fetch;
   let systemPrompt = "";
@@ -321,6 +365,93 @@ Deno.test("unresolved source questions block approval even when the model passes
   assert(!validated.guidelineChecks.completeness);
 });
 
+Deno.test("optional source and review questions do not block approval", () => {
+  const optional = "Which type of milk would you prefer?";
+  const steps = sourcePlan.steps.map((step, index) => ({
+    ...step,
+    optionalQuestions: index === 0 ? [optional] : [],
+  }));
+  const model = validModelPlan();
+  model.optionalQuestions = [optional];
+  const review = validateModelPlan(model, steps);
+  assert(review.approvalReady);
+  assert(!review.needsUserClarification);
+  assert(review.optionalQuestions[0] === optional);
+  assert(review.approvalBlockers.length === 0);
+});
+
+Deno.test("required questions take precedence when also marked optional", () => {
+  const required = "Which chemical is being used?";
+  const steps = sourcePlan.steps.map((step, index) => ({
+    ...step,
+    openQuestions: index === 0 ? [required] : [],
+    optionalQuestions: index === 0 ? [required] : [],
+  }));
+  const model = validModelPlan();
+  model.optionalQuestions = [required];
+  model.approvalBlockers = [required];
+  (model.guidelineChecks as Record<string, boolean>).safety = false;
+  const review = validateModelPlan(model, steps);
+  assert(!review.approvalReady);
+  assert(!review.guidelineChecks.completeness);
+  assert(review.optionalQuestions.length === 0);
+});
+
+Deno.test("a reviewer can classify a draft question as optional without an answer", () => {
+  const question = "What type of milk is preferred?";
+  const steps = sourcePlan.steps.map((step, index) => ({
+    ...step,
+    openQuestions: index === 0 ? [question] : [],
+  }));
+  const model = validModelPlan();
+  model.optionalQuestions = [question];
+  const review = validateModelPlan(model, steps);
+  assert(review.approvalReady);
+  assert(review.optionalQuestions[0] === question);
+  assert(review.clarificationQuestions.length === 0);
+});
+
+Deno.test("a question not explicitly reclassified remains blocking", () => {
+  const steps = sourcePlan.steps.map((step, index) => ({
+    ...step,
+    openQuestions: index === 0 ? ["Which chemical is used?"] : [],
+  }));
+  const model = validModelPlan();
+  model.optionalQuestions = ["Which other material?"];
+  assert(!validateModelPlan(model, steps).approvalReady);
+});
+
+Deno.test("optional questions are bounded and old reviews remain compatible", () => {
+  const oldReview = validModelPlan();
+  delete oldReview.optionalQuestions;
+  assert(validateModelPlan(oldReview, sourcePlan.steps).optionalQuestions.length === 0);
+  const invalid = validModelPlan();
+  invalid.optionalQuestions = Array(21).fill("Optional?");
+  assertThrows(() => validateModelPlan(invalid, sourcePlan.steps));
+  invalid.optionalQuestions = null;
+  assertThrows(() => validateModelPlan(invalid, sourcePlan.steps));
+  assertThrows(() =>
+    validateTaskPlanInput({
+      title: "Plan",
+      steps: [{ instruction: "Do it.", optionalQuestions: ["x".repeat(241)] }],
+    })
+  );
+  const plan = validateTaskPlanInput({
+    title: "Plan",
+    steps: [{ ...detailedStep("Do it."), optionalQuestions: ["  Choose later?  "] }],
+  });
+  assert(plan.steps[0].optionalQuestions?.[0] === "Choose later?");
+  const conflict = validateTaskPlanInput({
+    title: "Plan",
+    steps: [{
+      ...detailedStep("Do it."),
+      openQuestions: ["Which chemical?"],
+      optionalQuestions: ["WHICH CHEMICAL?"],
+    }],
+  });
+  assert(conflict.steps[0].optionalQuestions?.length === 0);
+});
+
 Deno.test("review uses the backend source instruction without requiring a model copy", async () => {
   const originalFetch = globalThis.fetch;
   const review = validModelPlan();
@@ -372,8 +503,15 @@ Deno.test("review conservatively resolves inconsistent clarification fields", as
       const review = validModelPlan();
       review.needsUserClarification = flag;
       review.clarificationQuestions = questions;
-      globalThis.fetch = async () =>
-        Response.json({ output: { message: { content: [{ text: JSON.stringify(review) }] } } });
+      globalThis.fetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        const value = body.system[0].text.includes("Classify the numbered")
+          ? { optionalIndexes: flag ? [0] : [], noOtherRequiredCompletenessIssues: true }
+          : review;
+        return Response.json({
+          output: { message: { content: [{ text: JSON.stringify(value) }] } },
+        });
+      };
       const result = await reviewTaskPlanForApprovalWithModel("us-east-1", {
         accessKeyId: "test-key",
         secretAccessKey: "test-secret",
@@ -382,6 +520,162 @@ Deno.test("review conservatively resolves inconsistent clarification fields", as
       assert(result.clarificationQuestions.length > 0);
       assert(!result.approvalReady);
     }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("targeted review defers nonessential questions without fabricating answers", async () => {
+  const originalFetch = globalThis.fetch;
+  const question = "Which milk is preferred?";
+  const plan = validateTaskPlanInput({
+    title: "Smoothie",
+    steps: [{ ...detailedStep("Add milk."), openQuestions: [question] }],
+  });
+  const review = validModelPlan();
+  review.steps = [{
+    sourceStepOrdinal: 1,
+    visualAcceptanceCriteria: ["Milk is visible."],
+    riskLevel: "low",
+    requiresUserConfirmation: false,
+    allowedTransitions: ["remain_in_progress", "candidate_complete"],
+  }];
+  review.needsUserClarification = true;
+  review.clarificationQuestions = [question];
+  review.approvalBlockers = ["Choose a milk type."];
+  (review.guidelineChecks as Record<string, boolean>).completeness = false;
+  let calls = 0;
+  globalThis.fetch = async (_input, init) => {
+    calls++;
+    const body = JSON.parse(String(init?.body));
+    const value = body.system[0].text.includes("Classify the numbered")
+      ? { optionalIndexes: [0, 1], noOtherRequiredCompletenessIssues: true }
+      : review;
+    return Response.json({ output: { message: { content: [{ text: JSON.stringify(value) }] } } });
+  };
+  try {
+    const result = await reviewTaskPlanForApprovalWithModel("us-east-1", {
+      accessKeyId: "test-key",
+      secretAccessKey: "test-secret",
+    }, plan);
+    assert(calls === 2);
+    assert(result.approvalReady && !result.needsUserClarification);
+    assert(result.optionalQuestions.includes(question));
+    assert(result.approvalBlockers.length === 0);
+    assert(plan.steps[0].openQuestions?.[0] === question);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("question classification cannot override a failed safety check", async () => {
+  const originalFetch = globalThis.fetch;
+  const plan = validateTaskPlanInput({
+    title: "Clean",
+    steps: [{ ...detailedStep("Use the chemical."), openQuestions: ["Which chemical?"] }],
+  });
+  const review = validModelPlan();
+  review.steps = [{
+    sourceStepOrdinal: 1,
+    visualAcceptanceCriteria: ["The surface is visible."],
+    riskLevel: "high",
+    requiresUserConfirmation: true,
+    allowedTransitions: ["remain_in_progress"],
+  }];
+  review.needsUserClarification = true;
+  review.clarificationQuestions = ["Which chemical?"];
+  review.approvalBlockers = ["Which chemical?"];
+  (review.guidelineChecks as Record<string, boolean>).safety = false;
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    const value = body.system[0].text.includes("Classify the numbered")
+      ? { optionalIndexes: [0], noOtherRequiredCompletenessIssues: true }
+      : review;
+    return Response.json({ output: { message: { content: [{ text: JSON.stringify(value) }] } } });
+  };
+  try {
+    const result = await reviewTaskPlanForApprovalWithModel("us-east-1", {
+      accessKeyId: "test-key",
+      secretAccessKey: "test-secret",
+    }, plan);
+    assert(!result.approvalReady && !result.guidelineChecks.safety);
+    assert(result.clarificationQuestions.includes("Which chemical?"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("optional preferences do not remove independent safety or completeness failures", async () => {
+  const originalFetch = globalThis.fetch;
+  const question = "Which milk is preferred?";
+  const plan = validateTaskPlanInput({
+    title: "Smoothie",
+    steps: [{ ...detailedStep("Add milk."), openQuestions: [question] }],
+  });
+  const review = validModelPlan();
+  review.steps = [{
+    sourceStepOrdinal: 1,
+    visualAcceptanceCriteria: ["Milk is visible."],
+    riskLevel: "low",
+    requiresUserConfirmation: false,
+    allowedTransitions: ["remain_in_progress"],
+  }];
+  review.clarificationQuestions = [question];
+  review.needsUserClarification = true;
+  review.approvalBlockers = ["The blending action is missing."];
+  (review.guidelineChecks as Record<string, boolean>).safety = false;
+  (review.guidelineChecks as Record<string, boolean>).completeness = false;
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    const value = body.system[0].text.includes("Classify the numbered")
+      ? { optionalIndexes: [0], noOtherRequiredCompletenessIssues: false }
+      : review;
+    return Response.json({ output: { message: { content: [{ text: JSON.stringify(value) }] } } });
+  };
+  try {
+    const result = await reviewTaskPlanForApprovalWithModel("us-east-1", {
+      accessKeyId: "test-key",
+      secretAccessKey: "test-secret",
+    }, plan);
+    assert(!result.approvalReady && !result.guidelineChecks.safety);
+    assert(!result.guidelineChecks.completeness);
+    assert(result.optionalQuestions.includes(question));
+    assert(result.approvalBlockers.includes("The blending action is missing."));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("invalid targeted classification fails safely", async () => {
+  const originalFetch = globalThis.fetch;
+  const plan = validateTaskPlanInput({
+    title: "Plan",
+    steps: [{ ...detailedStep("Do it."), openQuestions: ["Which option?"] }],
+  });
+  const review = validModelPlan();
+  review.steps = [{
+    sourceStepOrdinal: 1,
+    visualAcceptanceCriteria: ["Visible."],
+    riskLevel: "low",
+    requiresUserConfirmation: false,
+    allowedTransitions: ["remain_in_progress"],
+  }];
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    const value = body.system[0].text.includes("Classify the numbered")
+      ? { optionalIndexes: [99], noOtherRequiredCompletenessIssues: true }
+      : review;
+    return Response.json({ output: { message: { content: [{ text: JSON.stringify(value) }] } } });
+  };
+  try {
+    await reviewTaskPlanForApprovalWithModel("us-east-1", {
+      accessKeyId: "test-key",
+      secretAccessKey: "test-secret",
+    }, plan);
+    throw new Error("Expected classification failure.");
+  } catch (error) {
+    if (!(error instanceof TaskPlanValidationError)) throw error;
+    assert(error.reason === "invalid_question_classification");
   } finally {
     globalThis.fetch = originalFetch;
   }
