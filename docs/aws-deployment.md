@@ -118,8 +118,10 @@ time. A queued SHA that has been superseded on `main` is skipped.
 Set `METAGLASSES_AWS_DEPLOY_ROLE_ARN` to the `GitHubDeployRoleArn` output of `metaglasses-compute`.
 Postman dispatch uses the `POSTMAN_SYNC_APP_ID` repository variable and the
 `POSTMAN_SYNC_APP_PRIVATE_KEY` secret. The App installation must grant contents write access to
-`Adipat2003/metaglasses-postman`. A missing credential or failed dispatch fails the notification
-job. After fixing it, rerun the failed job to retry the notification from the verified deployment.
+`Adipat2003/metaglasses-postman`. The dispatch retries timeouts, refused connections, and
+transient HTTP responses up to twice. If the notification job still fails, check its log and
+correct any credential or permission errors. From the same deployment run, rerun the failed
+notification job to send the original verified SHA and run links again.
 
 Check the deploy job and its SSM response to diagnose a deployment failure. Revert the affected
 change on `main` to roll back the application, then check that CI and the deployment verify the

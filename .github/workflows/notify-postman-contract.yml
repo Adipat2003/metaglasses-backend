@@ -54,6 +54,7 @@ jobs:
               backend_sha:$sha, source_run_url:$ci, deployment_run_url:$deploy
             }}')
           curl --fail-with-body --silent --show-error --max-time 20 \
+            --retry 2 --retry-max-time 45 --retry-connrefused \
             --request POST \
             --header "Accept: application/vnd.github+json" \
             --header "Authorization: Bearer $DISPATCH_TOKEN" \

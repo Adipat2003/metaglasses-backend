@@ -140,9 +140,9 @@ Use that repository to import the collection and duplicate the selected environm
 test-user credentials. Do not commit populated environments here.
 
 After AWS deploys and verifies a CI-validated `main` revision, GitHub dispatches that exact SHA to
-the canonical Postman repository. Its contract workflow verifies route alignment and opens a PR
-only when the API source contract has changed. This backend intentionally does not carry generated
-Postman exports or environments.
+the canonical Postman repository. Its contract workflow regenerates the Native Git request files
+for that SHA, verifies route alignment, and proposes the resulting changes in a pull request.
+Duplicate events for the same SHA are skipped.
 
 ## Local development
 

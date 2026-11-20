@@ -166,13 +166,13 @@ def test_postman_dispatch_fails_visibly_without_app_credentials(
     assert ("::error::" in result.stdout) == bool(expected)
 
 
-def test_postman_dispatch_preserves_sha_and_run_urls() -> None:
+def test_postman_dispatch_bounds_retries_and_preserves_sha_and_run_urls() -> None:
     ci_url = "https://github.com/Adipat2003/metaglasses-backend/actions/runs/123"
     deploy_url = "https://github.com/Adipat2003/metaglasses-backend/actions/runs/124"
     result = run_step(
         POSTMAN,
         "Dispatch canonical Postman sync",
-        'curl() { printf "%s\\n" "${@: -3:1}" "${@: -1}"; }',
+        'curl() { printf "%s\\n" "$@"; }',
         BACKEND_SHA=SHA,
         SOURCE_RUN_URL=ci_url,
         DEPLOYMENT_RUN_URL=deploy_url,
@@ -180,8 +180,14 @@ def test_postman_dispatch_preserves_sha_and_run_urls() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    url, payload = result.stdout.splitlines()
+    *options, url, data_flag, payload = result.stdout.splitlines()
+    assert options[options.index("--max-time") + 1] == "20"
+    assert options[options.index("--retry") + 1] == "2"
+    assert options[options.index("--retry-max-time") + 1] == "45"
+    assert "--retry-connrefused" in options
+    assert "--retry-all-errors" not in options
     assert url == "https://api.github.com/repos/Adipat2003/metaglasses-postman/dispatches"
+    assert data_flag == "--data"
     assert json.loads(payload) == {
         "event_type": "backend-contract-changed",
         "client_payload": {
