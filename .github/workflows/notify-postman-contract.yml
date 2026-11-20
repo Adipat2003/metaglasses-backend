@@ -1,62 +1,64 @@
 name: Notify Postman contract sync
 
 on:
-  workflow_run:
-    workflows: [CI]
-    branches: [main]
-    types: [completed]
+  workflow_call:
+    inputs:
+      backend_sha:
+        required: true
+        type: string
+      source_run_url:
+        required: true
+        type: string
+    secrets:
+      postman_sync_app_private_key:
+        required: true
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   dispatch:
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push'
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - name: Check out validated backend revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 2
-
       - name: Check GitHub App configuration
-        id: sync
         env:
           POSTMAN_SYNC_APP_ID: ${{ vars.POSTMAN_SYNC_APP_ID }}
-          POSTMAN_SYNC_APP_PRIVATE_KEY: ${{ secrets.POSTMAN_SYNC_APP_PRIVATE_KEY }}
+          POSTMAN_SYNC_APP_PRIVATE_KEY: ${{ secrets.postman_sync_app_private_key }}
         run: |
-          if [ -n "$POSTMAN_SYNC_APP_ID" ] && [ -n "$POSTMAN_SYNC_APP_PRIVATE_KEY" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Configure POSTMAN_SYNC_APP_ID and POSTMAN_SYNC_APP_PRIVATE_KEY before enabling Postman sync PR dispatch."
+          if [[ -z "$POSTMAN_SYNC_APP_ID" || -z "$POSTMAN_SYNC_APP_PRIVATE_KEY" ]]; then
+            echo "::error::Configure POSTMAN_SYNC_APP_ID and POSTMAN_SYNC_APP_PRIVATE_KEY for Postman sync."
+            exit 1
           fi
 
       - name: Create short-lived Postman GitHub App token
         id: postman-app-token
-        if: steps.sync.outputs.enabled == 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ vars.POSTMAN_SYNC_APP_ID }}
-          private-key: ${{ secrets.POSTMAN_SYNC_APP_PRIVATE_KEY }}
+          private-key: ${{ secrets.postman_sync_app_private_key }}
           owner: Adipat2003
           repositories: metaglasses-postman
+          permission-contents: write
 
       - name: Dispatch canonical Postman sync
-        if: steps.sync.outputs.enabled == 'true'
         env:
           DISPATCH_TOKEN: ${{ steps.postman-app-token.outputs.token }}
-          BACKEND_SHA: ${{ github.event.workflow_run.head_sha }}
-          SOURCE_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          BACKEND_SHA: ${{ inputs.backend_sha }}
+          SOURCE_RUN_URL: ${{ inputs.source_run_url }}
+          DEPLOYMENT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          payload=$(printf '{"event_type":"backend-contract-changed","client_payload":{"backend_repository":"Adipat2003/metaglasses-backend","backend_sha":"%s","source_run_url":"%s"}}' "$BACKEND_SHA" "$SOURCE_RUN_URL")
-          curl --fail-with-body --silent --show-error \
+          payload=$(jq -nc \
+            --arg sha "$BACKEND_SHA" --arg ci "$SOURCE_RUN_URL" --arg deploy "$DEPLOYMENT_RUN_URL" \
+            '{event_type:"backend-contract-changed", client_payload:{
+              backend_repository:"Adipat2003/metaglasses-backend",
+              backend_sha:$sha, source_run_url:$ci, deployment_run_url:$deploy
+            }}')
+          curl --fail-with-body --silent --show-error --max-time 20 \
+            --retry 2 --retry-max-time 45 --retry-connrefused \
             --request POST \
             --header "Accept: application/vnd.github+json" \
             --header "Authorization: Bearer $DISPATCH_TOKEN" \
+            --header "Content-Type: application/json" \
             --header "X-GitHub-Api-Version: 2022-11-28" \
             https://api.github.com/repos/Adipat2003/metaglasses-postman/dispatches \
             --data "$payload"

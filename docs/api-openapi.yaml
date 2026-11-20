@@ -89,38 +89,38 @@ paths:
   /v1/chat:
     post:
       operationId: createChatResponse
-      summary: Generate and publish a chat response
+      summary: Generate a Talk response or publish paired chat
       description: |
-        Requires a Cognito access token and an active pairing owned by the caller. The client
-        sends the complete conversation on every call; the server does not retain history.
-        Image IDs are allowed on user messages only and must belong to this pairing. The compact
-        JSON transcript limit is 256000 UTF-8 bytes. Calls are not idempotent, so do not retry
-        after an uncertain response without considering that another model response may be
-        generated. Optional provider credentials are used for this call only and are not stored.
+        Send a Cognito access token and the relevant local transcript, up to 256000 UTF-8 bytes.
+        Phone requests use clientRequestId and may include a run and its current state version.
+        An optional observation must be observed for that run and state version. Phone requests
+        accept owner-scoped images on user messages. Retry the identical phone request with its
+        original ID. The legacy pairingToken shape uses pairing images, publishes to the lens,
+        and does not support idempotent retries. Provider credentials are used for the call only.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [pairingToken, messages]
-              properties:
-                pairingToken: { $ref: '#/components/schemas/PairingToken' }
-                messages:
-                  type: array
-                  minItems: 1
-                  items:
-                    type: object
-                    required: [role, content]
-                    properties:
-                      role: { type: string, enum: [user, assistant] }
-                      content: { type: string, minLength: 1 }
-                      imageIds: { type: array, items: { type: string, format: uuid } }
-                provider:
-                  $ref: '#/components/schemas/ExternalProvider'
+              oneOf:
+                - allOf:
+                    - $ref: '#/components/schemas/ChatTranscript'
+                    - type: object
+                      required: [pairingToken]
+                      properties:
+                        pairingToken: { $ref: '#/components/schemas/PairingToken' }
+                - allOf:
+                    - $ref: '#/components/schemas/ChatTranscript'
+                    - type: object
+                      required: [clientRequestId]
+                      properties:
+                        clientRequestId: { type: string, format: uuid }
+                        taskRunId: { type: string, format: uuid, description: Requires expectedStateVersion. }
+                        expectedStateVersion: { type: integer, minimum: 1, maximum: 9000000000000000, description: Requires taskRunId. }
+                        observationWindowId: { type: string, format: uuid, description: Requires taskRunId and expectedStateVersion. }
       responses:
         '200':
-          description: Generated response saved and published.
+          description: Generated response, also published to the lens for legacy paired chat.
           headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
           content:
             application/json:
@@ -131,9 +131,12 @@ paths:
                   responseId: { type: string }
                   text: { type: string }
                   createdAt: { type: string, format: date-time }
+                  taskRunId: { type: string, format: uuid, description: Present for a run-context reply. }
+                  stateVersion: { type: integer, minimum: 1, description: Present for a run-context reply. }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
         '413': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
         '429': { $ref: '#/components/responses/Error' }
@@ -144,11 +147,14 @@ paths:
       operationId: uploadPairingImage
       summary: Upload raw JPEG or PNG image bytes
       description: |
-        Requires a Cognito access token and an active pairing owned by the caller. Send a nonempty
-        raw JPEG or PNG file as the body; JSON, base64, and multipart bodies are rejected. The
-        declared content type must match the file signature. The file is limited to 8 MiB.
+        Requires a Cognito access token. Supply taskRunId for an active run owned by the caller,
+        pairingToken for a legacy active pairing, or omit both for owner-scoped Talk images.
+        Send a nonempty raw JPEG or PNG with a matching Content-Type. The cap is 2 MiB for run
+        images and 8 MiB for Talk and pairing images. Reuse clientImageId for the same bytes and scope.
       parameters:
-        - { name: pairingToken, in: query, required: true, schema: { $ref: '#/components/schemas/PairingToken' } }
+        - $ref: '#/components/parameters/ImagePairingToken'
+        - $ref: '#/components/parameters/ImageTaskRunId'
+        - { name: clientImageId, in: query, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
@@ -171,6 +177,8 @@ paths:
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
         '413': { $ref: '#/components/responses/Error' }
         '415': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
@@ -179,11 +187,12 @@ paths:
   /v1/images/{imageId}:
     delete:
       operationId: deletePairingImage
-      summary: Delete one image from the active pairing
-      description: Requires a Cognito access token, an active pairing owned by the caller, and an image uploaded to that pairing.
+      summary: Delete one image from its upload scope
+      description: Requires a Cognito access token and the same scope used at upload. Omit both scope parameters for a Talk image.
       parameters:
         - { name: imageId, in: path, required: true, schema: { type: string, format: uuid } }
-        - { name: pairingToken, in: query, required: true, schema: { $ref: '#/components/schemas/PairingToken' } }
+        - $ref: '#/components/parameters/ImagePairingToken'
+        - $ref: '#/components/parameters/ImageTaskRunId'
       responses:
         '204': { description: Image deleted., headers: { x-request-id: { $ref: '#/components/headers/RequestId' } } }
         '401': { $ref: '#/components/responses/Error' }
@@ -219,36 +228,40 @@ paths:
         '503': { $ref: '#/components/responses/Error' }
     post:
       operationId: createTaskPlan
-      summary: Create an initial plan proposal from user steps
+      summary: Create an initial plan proposal from a goal or user steps
       description: |
-        Saves the original normalized steps as version 1, invokes the model, and saves its
-        proposal as version 2. The plan stays in draft and requires user approval before a run.
-        Reuse the same clientRequestId and identical request when retrying. A model failure
-        can leave a draft stored; retrying resumes creation. Reusing the ID with a different
-        pairing, title, or steps returns 409. Concurrent retries may both call the model,
-        but only one proposal is persisted. Model outputs can differ between attempts. An
-        unapproved plan expires two hours after its creation, regardless of later edits.
+        Supply a short goal for a model-generated draft or provide a title and the original steps.
+        The plan stays in draft and requires explicit user approval before a run. Reuse the same
+        clientRequestId and identical request when retrying. A changed request with the same ID
+        returns 409. Unapproved plans expire two hours after creation.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [clientRequestId, title, steps]
-              properties:
-                pairingToken: { type: string, pattern: '^[0-9a-fA-F]{32}$', description: Legacy optional field. If supplied, it must be an active pairing owned by the caller. Omit for new clients. }
-                clientRequestId: { type: string, format: uuid }
-                title: { type: string, minLength: 1, maxLength: 160 }
-                steps:
-                  type: array
-                  minItems: 1
-                  maxItems: 30
-                  description: Combined normalized instruction length must not exceed 16000 characters.
-                  items:
-                    type: object
-                    required: [instruction]
-                    properties:
-                      instruction: { type: string, minLength: 1, maxLength: 1000 }
+              oneOf:
+                - type: object
+                  required: [goal, clientRequestId]
+                  additionalProperties: false
+                  properties:
+                    goal: { type: string, minLength: 1, maxLength: 2000 }
+                    clientRequestId: { type: string, format: uuid }
+                - type: object
+                  required: [clientRequestId, title, steps]
+                  properties:
+                    pairingToken: { type: string, pattern: '^[0-9a-fA-F]{32}$', description: Legacy optional field. If supplied, it must be an active pairing owned by the caller. Omit for new clients. }
+                    clientRequestId: { type: string, format: uuid }
+                    title: { type: string, minLength: 1, maxLength: 160 }
+                    steps:
+                      type: array
+                      minItems: 1
+                      maxItems: 30
+                      description: Combined normalized instruction length must not exceed 16000 characters.
+                      items:
+                        type: object
+                        required: [instruction]
+                        properties:
+                          instruction: { type: string, minLength: 1, maxLength: 1000 }
             example:
               clientRequestId: 11111111-1111-4111-8111-111111111111
               title: Make tea
@@ -329,24 +342,55 @@ paths:
         consent to publish the plan to all signed-in users. Runs a strict review and approves only
         if all checks pass and the plan is unchanged. On task_plan_guidelines_failed, retrieve
         the plan to display saved blockers and questions.
+        New clients send the exact reviewed version with a stable clientRequestId.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedVersion, clientRequestId]
+              properties:
+                expectedVersion: { type: integer, minimum: 1, maximum: 2147483647 }
+                clientRequestId: { type: string, format: uuid }
       responses:
         '200': { $ref: '#/components/responses/Plan' }
         '401': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
         '500': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
   /v1/task-runs:
+    get:
+      operationId: listUnfinishedTaskRuns
+      summary: List the caller's active and paused runs
+      parameters:
+        - { name: status, in: query, required: true, schema: { type: string, enum: [unfinished] } }
+      responses:
+        '200':
+          description: Unfinished runs owned by the caller, active first.
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/TaskRun' } }
+        '401': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
     post:
       operationId: startTaskRun
-      summary: Start an approved plan on the caller's active pairing
+      summary: Start an approved plan for the caller
       description: |
-        Requires a Cognito access token and an approved, validated plan. When supplied, pairingToken
-        must identify an active pairing owned by the caller. Omitting it retains legacy behavior
-        using the plan creator's original active pairing; new clients should always supply the
-        caller's active pairing when selecting a shared plan. Reuse the same clientRequestId and
-        payload after an uncertain result. At most one active or paused run can exist per plan version.
+        Requires a Cognito access token and an approved, validated plan. Phone clients provide
+        expectedPlanVersion and omit pairingToken. Legacy clients can provide an owned, active
+        pairing; requests omitting both fields use the plan's original pairing when available.
+        The caller can have one active run. To switch, supply its ID and state version in activeRun
+        so it is paused in the same transaction. Reuse the same clientRequestId and payload for retries.
       requestBody:
         required: true
         content:
@@ -357,9 +401,9 @@ paths:
               properties:
                 taskPlanId: { type: string, format: uuid }
                 clientRequestId: { type: string, format: uuid }
-                pairingToken:
-                  allOf: [{ $ref: '#/components/schemas/PairingToken' }]
-                  description: "Optional for legacy API callers. When omitted, the plan creator's original active pairing is used. New clients should supply the caller's active pairing."
+                pairingToken: { $ref: '#/components/schemas/PairingToken' }
+                expectedPlanVersion: { type: integer, minimum: 1, maximum: 2147483647 }
+                activeRun: { $ref: '#/components/schemas/ActiveRun' }
       responses:
         '201': { $ref: '#/components/responses/Run' }
         '401': { $ref: '#/components/responses/Error' }
@@ -372,7 +416,7 @@ paths:
     get:
       operationId: getTaskRun
       summary: Read the current task-run state
-      description: Requires a Cognito access token and a task run owned by the caller with its pairing still active.
+      description: Requires a Cognito access token and a task run owned by the caller.
       responses:
         '200': { $ref: '#/components/responses/Run' }
         '401': { $ref: '#/components/responses/Error' }
@@ -390,7 +434,7 @@ paths:
         latest stateVersion as expectedStateVersion. A command's validity depends on the current
         run state; on a stale or invalid transition response, fetch the run before deciding again.
         Reuse the same clientRequestId and identical command payload when retrying an uncertain
-        result.
+        result. Resume can include activeRun to pause a different active run atomically.
       requestBody:
         required: true
         content:
@@ -402,6 +446,7 @@ paths:
                   required: [command]
                   properties:
                     command: { type: string, enum: [pause, resume, repeat, confirm, skip, back, correct, stop] }
+                    activeRun: { $ref: '#/components/schemas/ActiveRun' }
       responses:
         '200': { $ref: '#/components/responses/RunCommand' }
         '401': { $ref: '#/components/responses/Error' }
@@ -435,12 +480,14 @@ paths:
       operationId: submitInferenceWindow
       summary: Queue one to three previously uploaded frames
       description: |
-        Requires a Cognito access token and an active run owned by the caller. All referenced
-        images must belong to its active pairing and each be at most 2 MiB. Submit one to three
-        unique image IDs. Capture times must be canonical UTC ISO timestamps with milliseconds,
-        strictly increasing, and between 30 seconds before and 5 seconds after server time.
-        Sequence numbers increase per run; reuse the same request ID and payload for retries.
-        A 202 means queued, not completed; observations do not advance the run.
+        Requires an active run owned by the caller and one to three unique run-scoped frames,
+        each up to 2 MiB. Paired runs also accept legacy images from the run's active pairing.
+        Capture times must be strictly increasing canonical UTC timestamps with milliseconds.
+        A new request accepts captures from 30 seconds before to 5 seconds after server time.
+        Replay the original request ID and payload after an uncertain submission, even after
+        the freshness window has passed. Phone runs accept one queued or processing window
+        at a time. An optional question is answered in the same observation. Poll the
+        returned window ID for its status. Observations never advance the run.
       requestBody:
         required: true
         content:
@@ -452,6 +499,7 @@ paths:
                 clientRequestId: { type: string, format: uuid }
                 expectedStateVersion: { type: integer, minimum: 1, maximum: 9000000000000000 }
                 sequenceNumber: { type: integer, minimum: 1, maximum: 9000000000000000 }
+                question: { type: string, minLength: 1, maxLength: 500 }
                 frames:
                   type: array
                   minItems: 1
@@ -484,12 +532,42 @@ paths:
         '422': { $ref: '#/components/responses/Error' }
         '500': { $ref: '#/components/responses/Error' }
         '503': { $ref: '#/components/responses/Error' }
+  /v1/task-runs/{taskRunId}/inference-windows/{windowId}:
+    parameters:
+      - $ref: '#/components/parameters/TaskRunId'
+      - { name: windowId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: getInferenceWindow
+      summary: Read a queued inference window and its eventual result
+      description: Requires a Cognito access token and an owned task run and window.
+      responses:
+        '200':
+          description: Status, with an observation when observed or a safe error code when rejected.
+          headers: { x-request-id: { $ref: '#/components/headers/RequestId' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InferenceWindow' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
 components:
   securitySchemes:
     cognitoAccessToken: { type: http, scheme: bearer, bearerFormat: JWT }
   parameters:
     TaskPlanId: { in: path, name: taskPlanId, required: true, schema: { type: string, format: uuid } }
     TaskRunId: { in: path, name: taskRunId, required: true, schema: { type: string, format: uuid } }
+    ImagePairingToken:
+      in: query
+      name: pairingToken
+      description: Legacy pairing scope. Mutually exclusive with taskRunId.
+      schema: { $ref: '#/components/schemas/PairingToken' }
+    ImageTaskRunId:
+      in: query
+      name: taskRunId
+      description: Run scope. Mutually exclusive with pairingToken.
+      schema: { type: string, format: uuid }
   headers:
     RequestId:
       description: Correlation ID for server logs.
@@ -527,6 +605,49 @@ components:
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
   schemas:
     PairingToken: { type: string, pattern: '^[0-9a-fA-F]{32}$' }
+    ChatTranscript:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role: { type: string, enum: [user, assistant] }
+              content: { type: string, minLength: 1 }
+              imageIds: { type: array, items: { type: string, format: uuid } }
+        provider: { $ref: '#/components/schemas/ExternalProvider' }
+    ActiveRun:
+      type: object
+      required: [taskRunId, expectedStateVersion]
+      properties:
+        taskRunId: { type: string, format: uuid }
+        expectedStateVersion: { type: integer, minimum: 1, maximum: 9000000000000000 }
+    InferenceWindow:
+      type: object
+      required: [inferenceWindowId, sequenceNumber, status, stateVersion, createdAt]
+      properties:
+        inferenceWindowId: { type: string, format: uuid }
+        sequenceNumber: { type: integer, minimum: 1 }
+        status: { type: string, enum: [queued, processing, observed, rejected] }
+        stateVersion: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        lastCapturedAt: { type: string, format: date-time, description: Latest frame capture for checking the ten-second Talk observation reuse limit. }
+        observation:
+          type: object
+          required: [summary, proposedTransition, confidence, evidenceFrameIndexes]
+          properties:
+            summary: { type: string, maxLength: 300 }
+            proposedTransition: { type: string, enum: [remain_in_progress, candidate_complete, blocked] }
+            confidence: { type: number, minimum: 0, maximum: 1 }
+            evidenceFrameIndexes: { type: array, minItems: 1, maxItems: 3, uniqueItems: true, items: { type: integer, minimum: 0, maximum: 2 } }
+            answer: { type: string, maxLength: 500 }
+        errorCode:
+          type: string
+          enum: [window_stale, window_worker_timeout, window_media_unavailable, window_inference_failed]
     RunRequest:
       type: object
       required: [clientRequestId, expectedStateVersion]
@@ -535,7 +656,7 @@ components:
         expectedStateVersion: { type: integer, minimum: 1, maximum: 9000000000000000 }
     TaskRun:
       type: object
-      required: [taskRunId, taskPlanId, planVersion, status, currentStepOrdinal, stateVersion, lensInstruction, createdAt, updatedAt, stoppedAt]
+      required: [taskRunId, taskPlanId, planVersion, status, currentStepOrdinal, stateVersion, latestSequenceNumber, lensInstruction, createdAt, updatedAt, stoppedAt]
       properties:
         taskRunId: { type: string, format: uuid }
         taskPlanId: { type: string, format: uuid }
@@ -544,6 +665,7 @@ components:
         currentStepOrdinal: { type: integer }
         currentStepStatus: { type: string, enum: [in_progress, confirmed, skipped] }
         stateVersion: { type: integer, minimum: 1 }
+        latestSequenceNumber: { type: integer, minimum: 0 }
         lensInstruction: { type: string }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }

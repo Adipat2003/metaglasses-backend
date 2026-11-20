@@ -75,13 +75,13 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Generate and publish a chat response
-         * @description Requires a Cognito access token and an active pairing owned by the caller. The client
-         *     sends the complete conversation on every call; the server does not retain history.
-         *     Image IDs are allowed on user messages only and must belong to this pairing. The compact
-         *     JSON transcript limit is 256000 UTF-8 bytes. Calls are not idempotent, so do not retry
-         *     after an uncertain response without considering that another model response may be
-         *     generated. Optional provider credentials are used for this call only and are not stored.
+         * Generate a Talk response or publish paired chat
+         * @description Send a Cognito access token and the relevant local transcript, up to 256000 UTF-8 bytes.
+         *     Phone requests use clientRequestId and may include a run and its current state version.
+         *     An optional observation must be observed for that run and state version. Phone requests
+         *     accept owner-scoped images on user messages. Retry the identical phone request with its
+         *     original ID. The legacy pairingToken shape uses pairing images, publishes to the lens,
+         *     and does not support idempotent retries. Provider credentials are used for the call only.
          */
         post: operations["createChatResponse"];
         delete?: never;
@@ -101,9 +101,10 @@ export interface paths {
         put?: never;
         /**
          * Upload raw JPEG or PNG image bytes
-         * @description Requires a Cognito access token and an active pairing owned by the caller. Send a nonempty
-         *     raw JPEG or PNG file as the body; JSON, base64, and multipart bodies are rejected. The
-         *     declared content type must match the file signature. The file is limited to 8 MiB.
+         * @description Requires a Cognito access token. Supply taskRunId for an active run owned by the caller,
+         *     pairingToken for a legacy active pairing, or omit both for owner-scoped Talk images.
+         *     Send a nonempty raw JPEG or PNG with a matching Content-Type. The cap is 2 MiB for run
+         *     images and 8 MiB for Talk and pairing images. Reuse clientImageId for the same bytes and scope.
          */
         post: operations["uploadPairingImage"];
         delete?: never;
@@ -123,8 +124,8 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Delete one image from the active pairing
-         * @description Requires a Cognito access token, an active pairing owned by the caller, and an image uploaded to that pairing.
+         * Delete one image from its upload scope
+         * @description Requires a Cognito access token and the same scope used at upload. Omit both scope parameters for a Talk image.
          */
         delete: operations["deletePairingImage"];
         options?: never;
@@ -150,14 +151,11 @@ export interface paths {
         get: operations["listTaskPlans"];
         put?: never;
         /**
-         * Create an initial plan proposal from user steps
-         * @description Saves the original normalized steps as version 1, invokes the model, and saves its
-         *     proposal as version 2. The plan stays in draft and requires user approval before a run.
-         *     Reuse the same clientRequestId and identical request when retrying. A model failure
-         *     can leave a draft stored; retrying resumes creation. Reusing the ID with a different
-         *     pairing, title, or steps returns 409. Concurrent retries may both call the model,
-         *     but only one proposal is persisted. Model outputs can differ between attempts. An
-         *     unapproved plan expires two hours after its creation, regardless of later edits.
+         * Create an initial plan proposal from a goal or user steps
+         * @description Supply a short goal for a model-generated draft or provide a title and the original steps.
+         *     The plan stays in draft and requires explicit user approval before a run. Reuse the same
+         *     clientRequestId and identical request when retrying. A changed request with the same ID
+         *     returns 409. Unapproved plans expire two hours after creation.
          */
         post: operations["createTaskPlan"];
         delete?: never;
@@ -252,6 +250,7 @@ export interface paths {
          *     consent to publish the plan to all signed-in users. Runs a strict review and approves only
          *     if all checks pass and the plan is unchanged. On task_plan_guidelines_failed, retrieve
          *     the plan to display saved blockers and questions.
+         *     New clients send the exact reviewed version with a stable clientRequestId.
          */
         post: operations["approveTaskPlan"];
         delete?: never;
@@ -267,15 +266,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List the caller's active and paused runs */
+        get: operations["listUnfinishedTaskRuns"];
         put?: never;
         /**
-         * Start an approved plan on the caller's active pairing
-         * @description Requires a Cognito access token and an approved, validated plan. When supplied, pairingToken
-         *     must identify an active pairing owned by the caller. Omitting it retains legacy behavior
-         *     using the plan creator's original active pairing; new clients should always supply the
-         *     caller's active pairing when selecting a shared plan. Reuse the same clientRequestId and
-         *     payload after an uncertain result. At most one active or paused run can exist per plan version.
+         * Start an approved plan for the caller
+         * @description Requires a Cognito access token and an approved, validated plan. Phone clients provide
+         *     expectedPlanVersion and omit pairingToken. Legacy clients can provide an owned, active
+         *     pairing; requests omitting both fields use the plan's original pairing when available.
+         *     The caller can have one active run. To switch, supply its ID and state version in activeRun
+         *     so it is paused in the same transaction. Reuse the same clientRequestId and payload for retries.
          */
         post: operations["startTaskRun"];
         delete?: never;
@@ -295,7 +295,7 @@ export interface paths {
         };
         /**
          * Read the current task-run state
-         * @description Requires a Cognito access token and a task run owned by the caller with its pairing still active.
+         * @description Requires a Cognito access token and a task run owned by the caller.
          */
         get: operations["getTaskRun"];
         put?: never;
@@ -323,7 +323,7 @@ export interface paths {
          *     latest stateVersion as expectedStateVersion. A command's validity depends on the current
          *     run state; on a stale or invalid transition response, fetch the run before deciding again.
          *     Reuse the same clientRequestId and identical command payload when retrying an uncertain
-         *     result.
+         *     result. Resume can include activeRun to pause a different active run atomically.
          */
         post: operations["commandTaskRun"];
         delete?: never;
@@ -367,14 +367,39 @@ export interface paths {
         put?: never;
         /**
          * Queue one to three previously uploaded frames
-         * @description Requires a Cognito access token and an active run owned by the caller. All referenced
-         *     images must belong to its active pairing and each be at most 2 MiB. Submit one to three
-         *     unique image IDs. Capture times must be canonical UTC ISO timestamps with milliseconds,
-         *     strictly increasing, and between 30 seconds before and 5 seconds after server time.
-         *     Sequence numbers increase per run; reuse the same request ID and payload for retries.
-         *     A 202 means queued, not completed; observations do not advance the run.
+         * @description Requires an active run owned by the caller and one to three unique run-scoped frames,
+         *     each up to 2 MiB. Paired runs also accept legacy images from the run's active pairing.
+         *     Capture times must be strictly increasing canonical UTC timestamps with milliseconds.
+         *     A new request accepts captures from 30 seconds before to 5 seconds after server time.
+         *     Replay the original request ID and payload after an uncertain submission, even after
+         *     the freshness window has passed. Phone runs accept one queued or processing window
+         *     at a time. An optional question is answered in the same observation. Poll the
+         *     returned window ID for its status. Observations never advance the run.
          */
         post: operations["submitInferenceWindow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/task-runs/{taskRunId}/inference-windows/{windowId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                taskRunId: components["parameters"]["TaskRunId"];
+                windowId: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Read a queued inference window and its eventual result
+         * @description Requires a Cognito access token and an owned task run and window.
+         */
+        get: operations["getInferenceWindow"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -386,6 +411,45 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         PairingToken: string;
+        ChatTranscript: {
+            messages: {
+                /** @enum {string} */
+                role: "user" | "assistant";
+                content: string;
+                imageIds?: string[];
+            }[];
+            provider?: components["schemas"]["ExternalProvider"];
+        };
+        ActiveRun: {
+            /** Format: uuid */
+            taskRunId: string;
+            expectedStateVersion: number;
+        };
+        InferenceWindow: {
+            /** Format: uuid */
+            inferenceWindowId: string;
+            sequenceNumber: number;
+            /** @enum {string} */
+            status: "queued" | "processing" | "observed" | "rejected";
+            stateVersion: number;
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Latest frame capture for checking the ten-second Talk observation reuse limit.
+             */
+            lastCapturedAt?: string;
+            observation?: {
+                summary: string;
+                /** @enum {string} */
+                proposedTransition: "remain_in_progress" | "candidate_complete" | "blocked";
+                confidence: number;
+                evidenceFrameIndexes: number[];
+                answer?: string;
+            };
+            /** @enum {string} */
+            errorCode?: "window_stale" | "window_worker_timeout" | "window_media_unavailable" | "window_inference_failed";
+        };
         RunRequest: {
             /** Format: uuid */
             clientRequestId: string;
@@ -403,6 +467,7 @@ export interface components {
             /** @enum {string} */
             currentStepStatus?: "in_progress" | "confirmed" | "skipped";
             stateVersion: number;
+            latestSequenceNumber: number;
             lensInstruction: string;
             /** Format: date-time */
             createdAt: string;
@@ -623,6 +688,10 @@ export interface components {
     parameters: {
         TaskPlanId: string;
         TaskRunId: string;
+        /** @description Legacy pairing scope. Mutually exclusive with taskRunId. */
+        ImagePairingToken: components["schemas"]["PairingToken"];
+        /** @description Run scope. Mutually exclusive with pairingToken. */
+        ImageTaskRunId: string;
     };
     requestBodies: never;
     headers: {
@@ -737,20 +806,28 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
+                "application/json": (components["schemas"]["ChatTranscript"] & {
                     pairingToken: components["schemas"]["PairingToken"];
-                    messages: {
-                        /** @enum {string} */
-                        role: "user" | "assistant";
-                        content: string;
-                        imageIds?: string[];
-                    }[];
-                    provider?: components["schemas"]["ExternalProvider"];
-                };
+                }) | (components["schemas"]["ChatTranscript"] & {
+                    /** Format: uuid */
+                    clientRequestId: string;
+                    /**
+                     * Format: uuid
+                     * @description Requires expectedStateVersion.
+                     */
+                    taskRunId?: string;
+                    /** @description Requires taskRunId. */
+                    expectedStateVersion?: number;
+                    /**
+                     * Format: uuid
+                     * @description Requires taskRunId and expectedStateVersion.
+                     */
+                    observationWindowId?: string;
+                });
             };
         };
         responses: {
-            /** @description Generated response saved and published. */
+            /** @description Generated response, also published to the lens for legacy paired chat. */
             200: {
                 headers: {
                     "x-request-id": components["headers"]["RequestId"];
@@ -762,12 +839,20 @@ export interface operations {
                         text: string;
                         /** Format: date-time */
                         createdAt: string;
+                        /**
+                         * Format: uuid
+                         * @description Present for a run-context reply.
+                         */
+                        taskRunId?: string;
+                        /** @description Present for a run-context reply. */
+                        stateVersion?: number;
                     };
                 };
             };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             413: components["responses"]["Error"];
             422: components["responses"]["Error"];
             429: components["responses"]["Error"];
@@ -777,8 +862,12 @@ export interface operations {
     };
     uploadPairingImage: {
         parameters: {
-            query: {
-                pairingToken: components["schemas"]["PairingToken"];
+            query?: {
+                /** @description Legacy pairing scope. Mutually exclusive with taskRunId. */
+                pairingToken?: components["parameters"]["ImagePairingToken"];
+                /** @description Run scope. Mutually exclusive with pairingToken. */
+                taskRunId?: components["parameters"]["ImageTaskRunId"];
+                clientImageId?: string;
             };
             header?: never;
             path?: never;
@@ -812,6 +901,8 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             413: components["responses"]["Error"];
             415: components["responses"]["Error"];
             422: components["responses"]["Error"];
@@ -821,8 +912,11 @@ export interface operations {
     };
     deletePairingImage: {
         parameters: {
-            query: {
-                pairingToken: components["schemas"]["PairingToken"];
+            query?: {
+                /** @description Legacy pairing scope. Mutually exclusive with taskRunId. */
+                pairingToken?: components["parameters"]["ImagePairingToken"];
+                /** @description Run scope. Mutually exclusive with pairingToken. */
+                taskRunId?: components["parameters"]["ImageTaskRunId"];
             };
             header?: never;
             path: {
@@ -899,6 +993,10 @@ export interface operations {
                  *     }
                  */
                 "application/json": {
+                    goal: string;
+                    /** Format: uuid */
+                    clientRequestId: string;
+                } | {
                     /** @description Legacy optional field. If supplied */
                     pairingToken?: string;
                     /** Format: uuid */
@@ -999,12 +1097,50 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    expectedVersion: number;
+                    /** Format: uuid */
+                    clientRequestId: string;
+                };
+            };
+        };
         responses: {
             200: components["responses"]["Plan"];
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            410: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    listUnfinishedTaskRuns: {
+        parameters: {
+            query: {
+                status: "unfinished";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unfinished runs owned by the caller, active first. */
+            200: {
+                headers: {
+                    "x-request-id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["TaskRun"][];
+                    };
+                };
+            };
+            401: components["responses"]["Error"];
             422: components["responses"]["Error"];
             500: components["responses"]["Error"];
             503: components["responses"]["Error"];
@@ -1024,8 +1160,9 @@ export interface operations {
                     taskPlanId: string;
                     /** Format: uuid */
                     clientRequestId: string;
-                    /** @description Optional for legacy API callers. When omitted, the plan creator's original active pairing is used. New clients should supply the caller's active pairing. */
                     pairingToken?: components["schemas"]["PairingToken"];
+                    expectedPlanVersion?: number;
+                    activeRun?: components["schemas"]["ActiveRun"];
                 };
             };
         };
@@ -1071,6 +1208,7 @@ export interface operations {
                 "application/json": components["schemas"]["RunRequest"] & {
                     /** @enum {string} */
                     command: "pause" | "resume" | "repeat" | "confirm" | "skip" | "back" | "correct" | "stop";
+                    activeRun?: components["schemas"]["ActiveRun"];
                 };
             };
         };
@@ -1126,6 +1264,7 @@ export interface operations {
                     clientRequestId: string;
                     expectedStateVersion: number;
                     sequenceNumber: number;
+                    question?: string;
                     frames: {
                         /** Format: uuid */
                         imageId: string;
@@ -1163,6 +1302,35 @@ export interface operations {
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            500: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    getInferenceWindow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                taskRunId: components["parameters"]["TaskRunId"];
+                windowId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Status, with an observation when observed or a safe error code when rejected. */
+            200: {
+                headers: {
+                    "x-request-id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InferenceWindow"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
             422: components["responses"]["Error"];
             500: components["responses"]["Error"];
             503: components["responses"]["Error"];

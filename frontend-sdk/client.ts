@@ -5,14 +5,13 @@ type ApiMethod<P extends ApiPath> = Uppercase<Extract<keyof paths[P], "get" | "p
 type OperationAt<P extends ApiPath, M extends ApiMethod<P>> =
   paths[P][Lowercase<M> & keyof paths[P]];
 
-type JsonContent<T> = T extends { content: infer C } ? C[keyof C] extends { schema: infer S } ? S
-  : never
-  : never;
-type InputOf<T> = T extends { requestBody: infer B } ? JsonContent<B> : never;
+type JsonContent<T> = T extends { content: { "application/json": infer S } } ? S : never;
+type InputOf<T> = T extends { requestBody?: infer B } ? JsonContent<B> : never;
 type OutputOf<T> = T extends { responses: infer R } ? {
-    [S in keyof R]: `${S & string}` extends `2${string}`
-      ? JsonContent<R[S]> extends never ? undefined
-      : JsonContent<R[S]>
+    [S in keyof R]: S extends string | number
+      ? `${S}` extends `2${string}`
+        ? JsonContent<R[S]> extends never ? undefined : JsonContent<R[S]>
+      : never
       : never;
   }[keyof R]
   : never;
@@ -27,12 +26,15 @@ export type TaskPlanPage = OutputOf<operations["listTaskPlans"]>;
 export type CreateTaskPlanInput = InputOf<operations["createTaskPlan"]>;
 export type TaskPlan = OutputOf<operations["createTaskPlan"]>;
 export type RefineTaskPlanInput = InputOf<operations["refineTaskPlan"]>;
+export type ApproveTaskPlanInput = InputOf<operations["approveTaskPlan"]>;
 export type TaskRun = OutputOf<operations["startTaskRun"]>;
+export type TaskRunPage = OutputOf<operations["listUnfinishedTaskRuns"]>;
 export type TaskRunCommandInput = InputOf<operations["commandTaskRun"]>;
 export type TaskRunCommandResult = OutputOf<operations["commandTaskRun"]>;
 export type StopTaskRunInput = InputOf<operations["stopTaskRun"]>;
 export type InferenceWindowInput = InputOf<operations["submitInferenceWindow"]>;
 export type InferenceWindowResponse = OutputOf<operations["submitInferenceWindow"]>;
+export type InferenceWindow = OutputOf<operations["getInferenceWindow"]>;
 export type TaskPlanStatus = NonNullable<
   operations["listTaskPlans"]["parameters"]["query"]
 >["status"];
@@ -51,10 +53,12 @@ type CoveredOperations =
   | "validateTaskPlan"
   | "approveTaskPlan"
   | "startTaskRun"
+  | "listUnfinishedTaskRuns"
   | "getTaskRun"
   | "commandTaskRun"
   | "stopTaskRun"
-  | "submitInferenceWindow";
+  | "submitInferenceWindow"
+  | "getInferenceWindow";
 type UnimplementedOperation = Exclude<keyof operations, CoveredOperations>;
 const allOperationsImplemented: UnimplementedOperation extends never ? true : never = true;
 void allOperationsImplemented;
@@ -66,13 +70,29 @@ export interface ClientOptions {
   accessToken?: string;
   /** Inject a fetch implementation for application networking or deterministic checks. */
   fetch?: typeof fetch;
-  /** Clock used for timestamp preflight checks. Defaults to Date.now. */
+  /** @deprecated Frame freshness and replay are decided by the server. */
   now?: () => number;
 }
 
 export interface CallOptions {
   signal?: AbortSignal;
 }
+
+export interface ImageScopeOptions extends CallOptions {
+  /** Omit for owner-only Talk media. */
+  taskRunId?: string;
+}
+
+export interface ImageUploadOptions extends ImageScopeOptions {
+  clientImageId?: string;
+}
+
+export type ApprovalOptions =
+  & CallOptions
+  & (
+    | ApproveTaskPlanInput
+    | { expectedVersion?: never; clientRequestId?: never }
+  );
 
 export class SdkValidationError extends Error {
   constructor(readonly field: string, message: string) {
@@ -122,13 +142,13 @@ export interface MetaGlassesClient {
   setPairingState(input: PairingStateInput, options?: CallOptions): Promise<void>;
   /** Requires a live pairing token. Polling reads only the latest display and does not refresh the pairing. */
   getDisplay(pairingToken: string, options?: CallOptions): Promise<DisplayResponse>;
-  /** Requires an active pairing owned by the caller. Sends the complete transcript; this call is not idempotent. */
+  /** Phone Talk uses a stable clientRequestId. Legacy paired chat uses pairingToken and publishes to the lens. */
   createChatResponse(input: ChatInput, options?: CallOptions): Promise<ChatResponse>;
   /** Requires an active pairing owned by the caller and a valid JPEG or PNG Blob up to 8 MiB. */
   uploadPairingImage(
     pairingToken: string,
     image: Blob,
-    options?: CallOptions,
+    options?: CallOptions & { clientImageId?: string },
   ): Promise<ImageUploadResponse>;
   /** Requires an active pairing owned by the caller and an image uploaded to that pairing. */
   deletePairingImage(
@@ -136,6 +156,10 @@ export interface MetaGlassesClient {
     pairingToken: string,
     options?: CallOptions,
   ): Promise<void>;
+  /** Upload a Talk image (8 MiB) or run frame (2 MiB). Reuse clientImageId for the same bytes. */
+  uploadImage(image: Blob, options?: ImageUploadOptions): Promise<ImageUploadResponse>;
+  /** Delete a Talk image or run frame using its original scope. */
+  deleteImage(imageId: string, options?: ImageScopeOptions): Promise<void>;
   /** Requires a Cognito token. Approved plans are shared; unapproved plans are only visible to their owner. */
   listTaskPlans(
     input?: { status?: TaskPlanStatus; limit?: number; offset?: number },
@@ -154,10 +178,12 @@ export interface MetaGlassesClient {
   /** Requires the caller's draft plan. The review can call the configured model and is saved only if the version is unchanged. */
   validateTaskPlan(taskPlanId: string, options?: CallOptions): Promise<TaskPlan>;
   /** Requires the caller's draft plan and explicit user consent. Approval is blocked until strict review passes. */
-  approveTaskPlan(taskPlanId: string, options?: CallOptions): Promise<TaskPlan>;
-  /** Requires an approved, validated plan and the caller's active pairing. Reuse the request ID and payload for retries. */
+  approveTaskPlan(taskPlanId: string, options?: ApprovalOptions): Promise<TaskPlan>;
+  /** Phone runs use expectedPlanVersion. Paired runs use pairingToken. Reuse the request ID and payload for retries. */
   startTaskRun(input: CreateRunInput, options?: CallOptions): Promise<TaskRun>;
-  /** Requires a task run owned by the caller with its pairing still active. */
+  /** Lists the caller's active and paused runs. */
+  listUnfinishedTaskRuns(options?: CallOptions): Promise<TaskRunPage>;
+  /** Requires a task run owned by the caller. */
   getTaskRun(taskRunId: string, options?: CallOptions): Promise<TaskRun>;
   /** Requires an active or paused run. Use its latest state version; command validity depends on the current run state. */
   commandTaskRun(
@@ -171,17 +197,21 @@ export interface MetaGlassesClient {
     input: StopTaskRunInput,
     options?: CallOptions,
   ): Promise<TaskRunCommandResult>;
-  /** Requires an active run and its pairing's uploaded images. Each image must be at most 2 MiB. A success means queued, not completed. */
+  /** Queue one to three images of at most 2 MiB each for an active run. */
   submitInferenceWindow(
     taskRunId: string,
     input: InferenceWindowInput,
     options?: CallOptions,
   ): Promise<InferenceWindowResponse>;
+  /** Read the current status and eventual observation of the caller's window. */
+  getInferenceWindow(
+    taskRunId: string,
+    windowId: string,
+    options?: CallOptions,
+  ): Promise<InferenceWindow>;
 }
 
-export type CreateRunInput = Omit<InputOf<operations["startTaskRun"]>, "pairingToken"> & {
-  pairingToken: string;
-};
+export type CreateRunInput = InputOf<operations["startTaskRun"]>;
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const pairingTokenPattern = /^[0-9a-f]{32}$/i;
@@ -309,8 +339,13 @@ function validateProvider(value: unknown): void {
 
 function validatePlan(input: CreateTaskPlanInput): void {
   const value = record(input, "input");
-  onlyKeys(value, ["clientRequestId", "title", "steps", "pairingToken"], "input");
   uuid(value.clientRequestId, "clientRequestId");
+  if (value.goal !== undefined) {
+    onlyKeys(value, ["clientRequestId", "goal"], "input");
+    normalizeText(value.goal, "goal", 2000);
+    return;
+  }
+  onlyKeys(value, ["clientRequestId", "title", "steps", "pairingToken"], "input");
   const title = normalizeText(value.title, "title", 160);
   if (!title) throw new SdkValidationError("title", "must not be blank");
   if (value.pairingToken !== undefined) pairingToken(value.pairingToken);
@@ -348,8 +383,32 @@ function validatePlan(input: CreateTaskPlanInput): void {
 
 function validateChat(input: ChatInput): void {
   const value = record(input, "input");
-  onlyKeys(value, ["pairingToken", "messages", "provider"], "input");
-  pairingToken(value.pairingToken);
+  if (value.pairingToken !== undefined) {
+    onlyKeys(value, ["pairingToken", "messages", "provider"], "input");
+    pairingToken(value.pairingToken);
+  } else {
+    onlyKeys(
+      value,
+      [
+        "clientRequestId",
+        "messages",
+        "provider",
+        "taskRunId",
+        "expectedStateVersion",
+        "observationWindowId",
+      ],
+      "input",
+    );
+    uuid(value.clientRequestId, "clientRequestId");
+    if (value.taskRunId !== undefined || value.expectedStateVersion !== undefined) {
+      uuid(value.taskRunId, "taskRunId");
+      positiveInteger(value.expectedStateVersion, "expectedStateVersion", 9_000_000_000_000_000);
+    }
+    if (value.observationWindowId !== undefined) {
+      uuid(value.taskRunId, "taskRunId");
+      uuid(value.observationWindowId, "observationWindowId");
+    }
+  }
   if (!Array.isArray(value.messages) || value.messages.length < 1) {
     throw new SdkValidationError("messages", "must contain at least one message");
   }
@@ -391,6 +450,18 @@ function validateRunRequest(
   positiveInteger(value.expectedStateVersion, "expectedStateVersion", 9_000_000_000_000_000);
 }
 
+function validateActiveRun(input: unknown): void {
+  if (input === undefined) return;
+  const run = record(input, "activeRun");
+  onlyKeys(run, ["taskRunId", "expectedStateVersion"], "activeRun");
+  uuid(run.taskRunId, "activeRun.taskRunId");
+  positiveInteger(
+    run.expectedStateVersion,
+    "activeRun.expectedStateVersion",
+    9_000_000_000_000_000,
+  );
+}
+
 export function createClient(options: ClientOptions): MetaGlassesClient {
   if (!options || typeof options !== "object") {
     throw new SdkValidationError("options", "are required");
@@ -411,7 +482,6 @@ export function createClient(options: ClientOptions): MetaGlassesClient {
     );
   }
   const fetcher = options.fetch ?? fetch;
-  const now = options.now ?? Date.now;
   const baseHref = base.href.endsWith("/") ? base.href : `${base.href}/`;
 
   async function request<P extends ApiPath, M extends ApiMethod<P>>(
@@ -480,6 +550,58 @@ export function createClient(options: ClientOptions): MetaGlassesClient {
     return requiredAccessToken(options.accessToken);
   }
 
+  async function uploadImage(
+    image: Blob,
+    query: URLSearchParams,
+    maxMiB: number,
+    call: CallOptions & { clientImageId?: string },
+  ): Promise<ImageUploadResponse> {
+    if (call.clientImageId !== undefined) {
+      query.set("clientImageId", uuid(call.clientImageId, "clientImageId"));
+    }
+    if (!(image instanceof Blob) || image.size < 1 || image.size > maxMiB * 1024 * 1024) {
+      throw new SdkValidationError(
+        "image",
+        `must be a nonempty JPEG or PNG no larger than ${maxMiB} MiB`,
+      );
+    }
+    const contentType = image.type.toLowerCase();
+    const signature = new Uint8Array(await image.slice(0, 8).arrayBuffer());
+    const jpeg = contentType === "image/jpeg" && signature.length >= 3 &&
+      signature[0] === 0xff && signature[1] === 0xd8 && signature[2] === 0xff;
+    const png = contentType === "image/png" && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+      .every((byte, index) => signature[index] === byte);
+    if (!jpeg && !png) {
+      throw new SdkValidationError("image", "content type must match a JPEG or PNG file signature");
+    }
+    return request(
+      (query.size ? `/v1/images?${query}` : "/v1/images") as "/v1/images",
+      "POST",
+      image,
+      authToken(),
+      call,
+      contentType,
+    );
+  }
+
+  function deleteImage(imageId: string, query: URLSearchParams, call: CallOptions): Promise<void> {
+    uuid(imageId, "imageId");
+    const imagePath = `/v1/images/${encodeURIComponent(imageId)}`;
+    return request(
+      (query.size ? `${imagePath}?${query}` : imagePath) as "/v1/images/{imageId}",
+      "DELETE",
+      undefined,
+      authToken(),
+      call,
+    );
+  }
+
+  function phoneImageQuery(call: ImageScopeOptions): URLSearchParams {
+    const query = new URLSearchParams();
+    if (call.taskRunId !== undefined) query.set("taskRunId", uuid(call.taskRunId, "taskRunId"));
+    return query;
+  }
+
   return {
     getHealth: (call = {}) => request("/healthz", "GET", undefined, undefined, call),
 
@@ -503,49 +625,16 @@ export function createClient(options: ClientOptions): MetaGlassesClient {
       return request("/v1/chat", "POST", input, authToken(), call);
     },
 
-    uploadPairingImage: async (token, image, call = {}) => {
-      pairingToken(token);
-      if (!(image instanceof Blob) || image.size < 1 || image.size > 8 * 1024 * 1024) {
-        throw new SdkValidationError(
-          "image",
-          "must be a nonempty JPEG or PNG no larger than 8 MiB",
-        );
-      }
-      const contentType = image.type.toLowerCase();
-      const signature = new Uint8Array(await image.slice(0, 8).arrayBuffer());
-      const jpeg = contentType === "image/jpeg" && signature.length >= 3 &&
-        signature[0] === 0xff && signature[1] === 0xd8 && signature[2] === 0xff;
-      const png = contentType === "image/png" && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
-        .every((byte, index) => signature[index] === byte);
-      if (!jpeg && !png) {
-        throw new SdkValidationError(
-          "image",
-          "content type must match a JPEG or PNG file signature",
-        );
-      }
-      const query = new URLSearchParams({ pairingToken: token });
-      return request(
-        `/v1/images?${query}` as "/v1/images",
-        "POST",
-        image,
-        authToken(),
-        call,
-        contentType,
-      );
-    },
+    uploadPairingImage: async (token, image, call = {}) =>
+      uploadImage(image, new URLSearchParams({ pairingToken: pairingToken(token) }), 8, call),
 
-    deletePairingImage: (imageId, token, call = {}) => {
-      uuid(imageId, "imageId");
-      pairingToken(token);
-      const query = new URLSearchParams({ pairingToken: token });
-      return request(
-        `/v1/images/${encodeURIComponent(imageId)}?${query}` as "/v1/images/{imageId}",
-        "DELETE",
-        undefined,
-        authToken(),
-        call,
-      );
-    },
+    deletePairingImage: (imageId, token, call = {}) =>
+      deleteImage(imageId, new URLSearchParams({ pairingToken: pairingToken(token) }), call),
+
+    uploadImage: async (image, call = {}) =>
+      uploadImage(image, phoneImageQuery(call), call.taskRunId === undefined ? 8 : 2, call),
+
+    deleteImage: (imageId, call = {}) => deleteImage(imageId, phoneImageQuery(call), call),
 
     listTaskPlans: (input = {}, call = {}) => {
       const value = record(input, "input");
@@ -629,12 +718,19 @@ export function createClient(options: ClientOptions): MetaGlassesClient {
 
     approveTaskPlan: (taskPlanId, call = {}) => {
       uuid(taskPlanId, "taskPlanId");
+      let approval: ApproveTaskPlanInput | undefined;
+      if (call.expectedVersion !== undefined || call.clientRequestId !== undefined) {
+        approval = {
+          expectedVersion: positiveInteger(call.expectedVersion, "expectedVersion", 2_147_483_647),
+          clientRequestId: uuid(call.clientRequestId, "clientRequestId"),
+        };
+      }
       return request(
         `/v1/task-plans/${
           encodeURIComponent(taskPlanId)
         }/approve` as "/v1/task-plans/{taskPlanId}/approve",
         "POST",
-        {},
+        approval ?? {},
         authToken(),
         call,
       );
@@ -642,12 +738,29 @@ export function createClient(options: ClientOptions): MetaGlassesClient {
 
     startTaskRun: (input, call = {}) => {
       const value = record(input, "input");
-      onlyKeys(value, ["taskPlanId", "clientRequestId", "pairingToken"], "input");
+      onlyKeys(
+        value,
+        ["taskPlanId", "clientRequestId", "pairingToken", "expectedPlanVersion", "activeRun"],
+        "input",
+      );
       uuid(value.taskPlanId, "taskPlanId");
       uuid(value.clientRequestId, "clientRequestId");
-      pairingToken(value.pairingToken);
+      if (value.pairingToken !== undefined) pairingToken(value.pairingToken);
+      if (value.expectedPlanVersion !== undefined) {
+        positiveInteger(value.expectedPlanVersion, "expectedPlanVersion", 2_147_483_647);
+      }
+      validateActiveRun(value.activeRun);
       return request("/v1/task-runs", "POST", input, authToken(), call);
     },
+
+    listUnfinishedTaskRuns: (call = {}) =>
+      request(
+        "/v1/task-runs?status=unfinished" as "/v1/task-runs",
+        "GET",
+        undefined,
+        authToken(),
+        call,
+      ),
 
     getTaskRun: (taskRunId, call = {}) => {
       uuid(taskRunId, "taskRunId");
@@ -663,11 +776,15 @@ export function createClient(options: ClientOptions): MetaGlassesClient {
     commandTaskRun: (taskRunId, input, call = {}) => {
       uuid(taskRunId, "taskRunId");
       const value = record(input, "input");
-      onlyKeys(value, ["clientRequestId", "expectedStateVersion", "command"], "input");
+      onlyKeys(value, ["clientRequestId", "expectedStateVersion", "command", "activeRun"], "input");
       validateRunRequest(value as unknown as TaskRunCommandInput);
       if (!taskRunCommands.includes(String(value.command))) {
         throw new SdkValidationError("command", "is not supported");
       }
+      if (value.activeRun !== undefined && value.command !== "resume") {
+        throw new SdkValidationError("activeRun", "is only supported when resuming");
+      }
+      validateActiveRun(value.activeRun);
       return request(
         `/v1/task-runs/${
           encodeURIComponent(taskRunId)
@@ -698,34 +815,39 @@ export function createClient(options: ClientOptions): MetaGlassesClient {
       const value = record(input, "input");
       onlyKeys(
         value,
-        ["clientRequestId", "expectedStateVersion", "sequenceNumber", "frames"],
+        ["clientRequestId", "expectedStateVersion", "sequenceNumber", "frames", "question"],
         "input",
       );
       uuid(value.clientRequestId, "clientRequestId");
       positiveInteger(value.expectedStateVersion, "expectedStateVersion", 9_000_000_000_000_000);
       positiveInteger(value.sequenceNumber, "sequenceNumber", 9_000_000_000_000_000);
+      if (value.question !== undefined) {
+        const question = typeof value.question === "string" ? value.question.trim() : "";
+        if (!question || question.includes("\u0000") || [...question].length > 500) {
+          throw new SdkValidationError("question", "must have 1 to 500 characters");
+        }
+      }
       if (!Array.isArray(value.frames) || value.frames.length < 1 || value.frames.length > 3) {
         throw new SdkValidationError("frames", "must contain 1 to 3 images");
       }
       let prior = -Infinity;
-      const currentTime = now();
       const seen = new Set<string>();
       value.frames.forEach((rawFrame, index) => {
         const frame = record(rawFrame, `frames[${index}]`);
         onlyKeys(frame, ["imageId", "capturedAt"], `frames[${index}]`);
-        const imageId = uuid(frame.imageId, `frames[${index}].imageId`);
+        const imageId = uuid(frame.imageId, `frames[${index}].imageId`).toLowerCase();
         if (seen.has(imageId)) throw new SdkValidationError("frames", "must not repeat an image");
         seen.add(imageId);
         const timestamp = string(frame.capturedAt, `frames[${index}].capturedAt`, 24, 24);
         const date = new Date(timestamp);
         const milliseconds = date.getTime();
         if (
-          Number.isNaN(milliseconds) || date.toISOString() !== timestamp || milliseconds <= prior ||
-          milliseconds < currentTime - 30_000 || milliseconds > currentTime + 5_000
+          Number.isNaN(milliseconds) || date.getUTCFullYear() < 1 ||
+          date.toISOString() !== timestamp || milliseconds <= prior
         ) {
           throw new SdkValidationError(
             `frames[${index}].capturedAt`,
-            "must be a strictly increasing UTC timestamp with milliseconds within the accepted time window",
+            "must be a strictly increasing UTC timestamp with milliseconds",
           );
         }
         prior = milliseconds;
@@ -736,6 +858,20 @@ export function createClient(options: ClientOptions): MetaGlassesClient {
         }/inference-windows` as "/v1/task-runs/{taskRunId}/inference-windows",
         "POST",
         input,
+        authToken(),
+        call,
+      );
+    },
+
+    getInferenceWindow: (taskRunId, windowId, call = {}) => {
+      uuid(taskRunId, "taskRunId");
+      uuid(windowId, "windowId");
+      return request(
+        `/v1/task-runs/${encodeURIComponent(taskRunId)}/inference-windows/${
+          encodeURIComponent(windowId)
+        }` as "/v1/task-runs/{taskRunId}/inference-windows/{windowId}",
+        "GET",
+        undefined,
         authToken(),
         call,
       );

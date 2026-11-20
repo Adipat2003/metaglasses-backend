@@ -6,7 +6,7 @@ RDS, S3, and AWS credentials. The repository does not provide a fully local AWS 
 ## Prerequisites
 
 - Node.js 22.16.0 and npm for SDK generation and validation.
-- Python 3.12 and `uv` for repository configuration tests.
+- Python 3.12, `uv`, Bash, and `jq` for repository and release workflow tests.
 - Docker for the pinned Deno 2.5.2 checks and application image build.
 - An AWS environment, Cognito test account, and access token for the optional integration smoke test.
 
@@ -35,10 +35,7 @@ docker run --rm --volume "$PWD:/work" --workdir /work \
     deno check --config backend/deno.json \
       backend/api/index.ts backend/cleanup-pairing-images/index.ts
     deno test --allow-env --allow-read --config backend/deno.json \
-      backend/api/errors_test.ts backend/api/index_test.ts \
-      backend/api/cognito_clients_test.ts backend/api/nvidia_test.ts \
-      backend/api/providers_test.ts backend/api/task_plan_test.ts \
-      backend/api/task_plan_create_test.ts
+      backend/api/
   '
 bash -n scripts/smoke-task-guidance-api.sh
 bash scripts/test-task-plan-library-db.sh

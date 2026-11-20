@@ -139,10 +139,10 @@ The canonical MetaGlasses Postman collection and environments live in the separa
 Use that repository to import the collection and duplicate the selected environment before adding
 test-user credentials. Do not commit populated environments here.
 
-After each successful CI run for a merge to `main`, GitHub dispatches the exact backend revision to
-the canonical Postman repository. Its contract workflow verifies route alignment and opens a PR
-only when the API source contract has changed. This backend intentionally does not carry generated
-Postman exports or environments.
+After AWS deploys and verifies a CI-validated `main` revision, GitHub dispatches that exact SHA to
+the canonical Postman repository. Its contract workflow regenerates the Native Git request files
+for that SHA, verifies route alignment, and proposes the resulting changes in a pull request.
+Duplicate events for the same SHA are skipped.
 
 ## Local development
 
@@ -154,15 +154,15 @@ smoke test.
 The [CI workflow](.github/workflows/ci.yml) runs on Ubuntu 24.04 with SHA-pinned actions. It
 regenerates and checks the SDK, runs its tests and package privacy check, lints and tests the Python
 AWS configuration, then runs Deno formatting, type-checking, and tests in one container. It also
-checks the database migration scripts. After successful CI on each push to `main`, the
-[SDK publish workflow](.github/workflows/publish-frontend-sdk.yml) regenerates, validates, and
-publishes a unique stable patch version to npm with the `latest` tag. The
-[AWS deployment workflow](.github/workflows/aws-deploy.yml) deploys merged `main` commits using
-GitHub OIDC and SSM, applies pending RDS migrations, then checks the service health endpoint.
+checks the database migration scripts and release workflow gates.
 
-When the Postman sync GitHub App is configured, a successful `CI` run for a push to `main`
-dispatches that exact backend revision to the canonical Postman repository. See
-[the Postman sync workflow](.github/workflows/notify-postman-contract.yml).
+Successful push CI on `main` starts two workflows. The
+[AWS deployment workflow](.github/workflows/aws-deploy.yml) deploys the exact validated SHA if it is
+still at the tip of `main`. It applies pending RDS migrations, verifies the running image and
+health endpoint, then [dispatches that SHA to Postman](.github/workflows/notify-postman-contract.yml).
+The [SDK publish workflow](.github/workflows/publish-frontend-sdk.yml) regenerates and validates the
+package from the exact SHA recorded in its provenance and publishes to npm only when its version
+advances `latest`.
 
 AWS infrastructure is managed separately through CloudFormation. See
 [AWS deployment and operations](docs/aws-deployment.md) for setup, release, and recovery.

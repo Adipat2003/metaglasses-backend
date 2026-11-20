@@ -1,14 +1,15 @@
 # Releasing
 
-Every successful CI run for a push to `main` triggers an npm publish for that exact commit. The
-workflow regenerates the endpoint types, runs the SDK checks, verifies package contents, then
-publishes with npm provenance using short-lived credentials from GitHub OIDC. It runs on Ubuntu
+Successful push CI on `main` triggers the SDK publish workflow. The job requires the validated
+commit to match the SHA in GitHub's provenance. It regenerates the endpoint types, runs the SDK
+checks, and verifies the final package contents before publishing with GitHub OIDC and provenance. It runs on Ubuntu
 24.04 with Node.js 22.16.0 and npm 11.5.1.
 
 The checked-in `package.json` version supplies the major and minor version. The workflow uses the
 CI run number as the patch version, creating a unique stable version such as `0.1.123`, and
-publishes it to npm's `latest` dist-tag. Frontends using `npm install metaglasses-sdk` receive the
-newest publish. Pinned frontend dependencies update only when the frontend chooses to install or
+publishes it to npm's `latest` dist-tag only if it is newer than the registry's current
+`latest`. Publishes run one at a time so a rerun cannot roll the tag back. Frontends using
+`npm install metaglasses-sdk` receive the newest publish. Pinned frontend dependencies update only when the frontend chooses to install or
 upgrade the SDK.
 
 The initial public package, `metaglasses-sdk@0.1.0`, is published. The one-time bootstrap is
@@ -41,4 +42,4 @@ Then, in the npm package settings, add a GitHub Actions trusted publisher with:
 After that setup, publishes use short-lived GitHub OIDC credentials. No npm token is stored in
 GitHub. npm requires the first successful trusted publish within two days of configuring the
 publisher. Update the major or minor version in `package.json` when intentionally changing the
-SDK's compatibility line. Every successful push to `main` then produces a unique npm version.
+SDK's compatibility line. The next qualifying `main` run publishes on that version line.

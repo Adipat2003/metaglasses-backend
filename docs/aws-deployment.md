@@ -99,28 +99,41 @@ extensions.
 
 ## Deploy application code
 
-Pushing a merged commit to `main` triggers `.github/workflows/aws-deploy.yml`.
+Successful push CI on `main` triggers `.github/workflows/aws-deploy.yml`. Deployments run one at a
+time. A queued SHA that has been superseded on `main` is skipped.
 
 1. The GitHub-hosted Ubuntu 24.04 runner uses SHA-pinned actions and assumes the AWS deploy role
    through OIDC. No static AWS key is stored in GitHub.
-2. The workflow builds the Deno container and pushes an immutable commit-SHA tag to ECR.
+2. The workflow builds the Deno container from the exact validated commit and pushes its immutable
+   SHA tag to ECR. A retry can reuse that image.
 3. It sends an SSM command to EC2 to pull the image and apply unapplied migrations as the separate
    IAM-authenticated migrator role. A migration failure leaves the previous API container running.
 4. It starts that image after the migration succeeds.
 5. The container listens on port 8000. The EC2 security group accepts that port only from the
    internal ALB.
-6. The workflow checks `http://127.0.0.1:8000/healthz` on EC2 and fails if the container does not
-   become healthy.
+6. The workflow checks the running image and `http://127.0.0.1:8000/healthz` on EC2. A retry
+   verifies an already healthy matching container without restarting it.
+7. The Postman job dispatches the verified SHA with links to its CI and deployment runs.
 
-The workflow needs the GitHub repository variable `METAGLASSES_AWS_DEPLOY_ROLE_ARN`, set to the
-`GitHubDeployRoleArn` output of `metaglasses-compute`.
+Set `METAGLASSES_AWS_DEPLOY_ROLE_ARN` to the `GitHubDeployRoleArn` output of `metaglasses-compute`.
+Postman dispatch uses the `POSTMAN_SYNC_APP_ID` repository variable and the
+`POSTMAN_SYNC_APP_PRIVATE_KEY` secret. The App installation must grant contents write access to
+`Adipat2003/metaglasses-postman`. The dispatch retries timeouts, refused connections, and
+transient HTTP responses up to twice. If the notification job still fails, check its log and
+correct any credential or permission errors. From the same deployment run, rerun the failed
+notification job to send the original verified SHA and run links again.
+
+Check the deploy job and its SSM response to diagnose a deployment failure. Revert the affected
+change on `main` to roll back the application, then check that CI and the deployment verify the
+revert SHA. Handle any already applied database migration separately.
 
 ## Publish the frontend SDK
 
-SDK publishing is separate from the AWS API deployment. Each successful CI run for a push to
-`main` starts `publish-frontend-sdk.yml` for that exact commit. The workflow regenerates the
-OpenAPI types, runs the SDK checks, creates a unique stable patch version, checks the npm package
-contents, and publishes to npm's `latest` tag with GitHub OIDC and provenance. Follow
+SDK publishing runs separately from the AWS API deployment. Successful push CI on `main` starts
+`publish-frontend-sdk.yml`. The publish job requires its provenance SHA to match the validated
+commit. It regenerates the OpenAPI types, runs the SDK checks, and verifies the final package
+contents. It publishes with GitHub OIDC and provenance only when the version advances npm's
+`latest` tag. Follow
 [the SDK release guide](../frontend-sdk/RELEASING.md) for versioning and npm trusted publisher
 configuration.
 

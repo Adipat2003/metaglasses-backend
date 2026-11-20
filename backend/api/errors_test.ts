@@ -67,3 +67,15 @@ Deno.test("unexpected failures and provider bodies never reach the client", asyn
   );
   assert(body.includes("upstream_status"), "Safe upstream status missing");
 });
+
+Deno.test("run conflicts expose the safe plan and state versions", async () => {
+  const error = new ApiError(409, "Run changed.", false, "task_run_active_conflict", {
+    plan_version: 2,
+    state_version: 3,
+    token_hash: "private pairing data",
+  });
+  const { error: { context } } = await errorResponse(error, "request-id", {}).json();
+  assert(context.plan_version === 2, "Approved plan version missing");
+  assert(context.state_version === 3, "Active run state version missing");
+  assert(!("token_hash" in context), "Pairing data leaked");
+});

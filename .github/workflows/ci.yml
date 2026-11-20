@@ -70,13 +70,7 @@ jobs:
                 backend/api/index.ts \
                 backend/cleanup-pairing-images/index.ts
               deno test --allow-env --allow-read --config backend/deno.json \
-                backend/api/errors_test.ts \
-                backend/api/index_test.ts \
-                backend/api/cognito_clients_test.ts \
-                backend/api/nvidia_test.ts \
-                backend/api/providers_test.ts \
-                backend/api/task_plan_test.ts \
-                backend/api/task_plan_create_test.ts
+                backend/api/
             '
           bash -n scripts/smoke-task-guidance-api.sh
           bash scripts/test-task-plan-library-db.sh
