@@ -29,23 +29,54 @@ const database = postgres({
 const s3 = new S3Client({ region });
 const bucket = requiredEnvironment("PAIRING_IMAGE_BUCKET");
 
-export async function runCleanup(): Promise<number> {
-  const claimed = await database`select * from app.claim_expired_pairing_images(${1000})` as Array<{
-    image_id: string;
-    object_path: string;
-  }>;
+interface CleanupImage {
+  image_id: string;
+  object_path: string;
+}
+
+async function cleanupImages(
+  claimed: CleanupImage[],
+  finalize: (imageIds: string[]) => PromiseLike<{ count: number }[]>,
+): Promise<number> {
   if (claimed.length === 0) return 0;
 
-  await s3.send(
+  const result = await s3.send(
     new DeleteObjectsCommand({
       Bucket: bucket,
       Delete: { Objects: claimed.map((image) => ({ Key: image.object_path })) },
     }),
+    { abortSignal: AbortSignal.timeout(15_000) },
   );
-  const removed = await database`select app.finalize_expired_pairing_images(${
-    claimed.map((image) => image.image_id)
-  }) as count`;
-  return Number(removed[0].count);
+  const deleted = new Set(result.Deleted?.map((image) => image.Key));
+  const removed = claimed.filter((image) => deleted.has(image.object_path));
+  const count = removed.length
+    ? Number((await finalize(removed.map((image) => image.image_id)))[0].count)
+    : 0;
+  if (removed.length !== claimed.length) {
+    throw new Error("Some image objects could not be deleted.");
+  }
+  return count;
+}
+
+export async function runCleanup(): Promise<number> {
+  const results = await Promise.allSettled([
+    (async () =>
+      cleanupImages(
+        await database<CleanupImage[]>`select * from app.claim_expired_pairing_images(${1000})`,
+        (ids) => database`select app.finalize_expired_pairing_images(${ids}) as count`,
+      ))(),
+    (async () =>
+      cleanupImages(
+        await database<CleanupImage[]>`select * from app.claim_expired_scoped_images(${1000})`,
+        (ids) => database`select app.finalize_expired_scoped_images(${ids}) as count`,
+      ))(),
+  ]);
+  let deleted = 0;
+  for (const result of results) {
+    if (result.status === "rejected") throw result.reason;
+    deleted += result.value;
+  }
+  return deleted;
 }
 
 if (import.meta.main) {

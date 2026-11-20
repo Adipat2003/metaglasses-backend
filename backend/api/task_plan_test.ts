@@ -1,4 +1,5 @@
 import {
+  generateTaskPlanFromGoalWithModel,
   parseModelJson,
   planValidatorModelId,
   refineTaskPlanWithModel,
@@ -7,6 +8,7 @@ import {
   TaskPlanValidationError,
   validateModelPlan,
   validateTaskPlanFeedback,
+  validateTaskPlanGoal,
   validateTaskPlanInput,
   validateTaskPlanRefinement,
   validateTaskPlanRevisionHistory,
@@ -277,6 +279,59 @@ Deno.test("refinement preserves an unanswered optional choice without inventing 
     assert(result.steps[0].optionalQuestions?.[0] === "Which milk?");
     assert(prompt.includes("Never move a safety-critical"));
     assert(prompt.includes("I don't know which milk"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("goal drafting validates model output and maps provider failures", async () => {
+  const originalFetch = globalThis.fetch;
+  let modelResponse = Response.json({
+    output: {
+      message: {
+        content: [{
+          text: JSON.stringify({
+            title: " Fold laundry ",
+            steps: [detailedStep("Fold the shirt.")],
+          }),
+        }],
+      },
+    },
+  });
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    assert(body.outputConfig.textFormat.type === "json_schema");
+    assert(body.messages[0].content[0].text === JSON.stringify({ goal: "Fold laundry" }));
+    return modelResponse;
+  };
+  const draft = () =>
+    generateTaskPlanFromGoalWithModel(
+      "us-east-1",
+      { accessKeyId: "test-key", secretAccessKey: "test-secret" },
+      validateTaskPlanGoal(" Fold laundry "),
+    );
+  try {
+    const plan = await draft();
+    assert(plan.title === "Fold laundry" && plan.steps[0].ordinal === 1);
+    assert(plan.steps[0].instruction === "Fold the shirt.");
+    assert(!("approvalReady" in plan) && !("status" in plan));
+    for (
+      const [response, errorType] of [
+        [
+          Response.json({ output: { message: { content: [{ text: "{}" }] } } }),
+          TaskPlanValidationError,
+        ],
+        [new Response(null, { status: 429 }), TaskPlanProviderError],
+      ] as const
+    ) {
+      modelResponse = response;
+      await draft().then(
+        () => {
+          throw new Error("Invalid proposal must fail.");
+        },
+        (error) => assert(error instanceof errorType),
+      );
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }

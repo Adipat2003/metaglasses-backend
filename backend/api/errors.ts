@@ -48,6 +48,7 @@ export function errorResponse(
     "suggested_action",
     "maximum_inline_image_bytes",
     "prior_upstream_statuses",
+    "plan_version",
     "state_version",
   ]);
   const context = Object.fromEntries(

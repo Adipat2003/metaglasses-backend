@@ -15,53 +15,40 @@ should prefer the [frontend SDK](../frontend-sdk/README.md) for named calls and 
 
 ## Frontend authentication configuration
 
-These public values were read from the AWS stack during the previous deployment session. On
-2026-11-11 the public Cognito discovery document confirmed the issuer and hosted endpoints; the
-AWS SSO session was expired, so the stack and running client allowlist could not be rechecked in
-this handoff update.
+Glance uses the Cognito native SRP public client. Configure the target user pool and client from
+the environment's auth stack. Use Cognito for sign-in, verification, recovery, and refresh, and
+store session credentials in platform-protected storage. Protected API routes require the current
+**access token** in the bearer header.
 
-| Setting | Value |
+| Setting | Production public configuration |
 | --- | --- |
 | AWS Region | `us-east-1` |
 | Cognito user pool ID | `us-east-1_YzNGN326J` |
-| Glanss mobile OAuth public client ID | `2rik7ab2daicig70vsu703op0v` |
+| Native SRP app client ID | `4leqhun6661r81k1pprj28cttq` |
 | Issuer | `https://cognito-idp.us-east-1.amazonaws.com/us-east-1_YzNGN326J` |
-| Authorization endpoint | `https://metaglasses-995342110760.auth.us-east-1.amazoncognito.com/oauth2/authorize` |
-| Token endpoint | `https://metaglasses-995342110760.auth.us-east-1.amazoncognito.com/oauth2/token` |
-| Mobile sign-in and logout redirect | `glanss://auth/callback` |
-| Allowed scopes | `openid email profile` |
-| Flow | Authorization code with PKCE, `S256`; public client, no client secret |
 | API base URL | `https://xay03orwv0.execute-api.us-east-1.amazonaws.com` |
 
-The configured access-token lifetime is 15 minutes and refresh-token lifetime is 30 days, with
-refresh-token rotation enabled. Use the current **access token** in the bearer header. Store tokens
-in platform-protected storage, handle session refresh, and clear local credentials on sign-out.
-An ID token is not accepted by the API. The checked-in auth template also has a separate legacy
-SRP client and a Postman OAuth client; do not substitute either ID for the Glanss OAuth ID.
-
-The backend verifies the issuing client against its own allowlist. The Glanss client was added to
-the running container in the previous deployment session, but the CloudFormation parameter was
-not changed because its prepared change set could replace the EC2 instance. **An instance
-replacement can therefore remove that running allowlist change.** Before release, the backend
-operator must reconcile the stack and verify a real Glanss access token against a protected route.
-The public health check does not test authentication.
-
-For OAuth: generate a unique verifier and `S256` challenge and a random `state`, open the
-Cognito authorization endpoint with `response_type=code`, client ID, redirect URI, scopes,
-challenge, and state; validate the returned state; then exchange the authorization code and original
-verifier at the token endpoint. The mobile app must register the exact callback scheme. Cognito
-handles sign-up, verification, sign-in, refresh, and password recovery; the backend router does not
-provide those routes. The template configures email-based sign-in and optional software-token MFA.
-Do not embed server credentials or a confidential client secret in the app.
+Postman uses the separate public OAuth client and the root collection token manager. Configure
+authorization code with PKCE (`S256`) using the selected environment's client ID and callback
+`https://oauth.pstmn.io/v1/callback`. The optional Glanss browser client uses its own ID and
+`glanss://auth/callback`. Verify the API allowlist with a real access token on a protected route.
 
 ## Architecture and responsibilities
 
-1. The phone authenticates with the configured Cognito user pool and sends its access token to protected routes.
-2. The phone creates a cryptographically random 16-byte pairing capability encoded as 32 hexadecimal characters, transfers it securely to the lens, and registers it with `POST /v1/state`.
-3. The lens polls `GET /v1/display?token=...` using that capability. Possession of the pairing token grants display access, so protect it like a password. Do not put it in analytics, logs, screenshots, or public links. Query parameters can be retained by clients and intermediaries.
-4. The phone uploads optional camera images and sends a conversation to chat. The API calls a model and saves the most recent display response. The client owns conversation history.
-5. For guided tasks, the phone creates and reviews a plan, obtains explicit user approval, starts a run, and sends user commands and optional frame windows. The backend publishes instructions to the same lens display.
-6. The Deno service uses private PostgreSQL functions for data, private S3 objects for images, NVIDIA for managed chat, and Bedrock for plan review and visual observation. The cleanup worker removes expired images. See [AWS operations](aws-deployment.md) for infrastructure and recovery.
+- The phone owns its Talk transcript, voice capture, speech recognition, and speech synthesis.
+  Guide drafts from a goal, requires user approval of the exact version, then pins it in a run.
+- RDS stores owner-scoped runs and serializes transitions per owner. PostgreSQL enforces one
+  active run and keeps paused runs available across sessions. Only user commands advance a step.
+- The API uses owner-checked PostgreSQL functions and private S3 objects for images. Migration
+  functions expose narrow execute permissions to `metaglasses_api`. AWS IAM and the private
+  network control service access. Bedrock reviews plans and camera frames. Managed Talk uses NVIDIA.
+- Goal drafting, versioned approval, and phone chat use a six-minute request lease and a 24-hour
+  replay record with a digest and bounded result. Cleanup removes expired records and images.
+  Camera workers claim with a 30-second lease, reject stale state, and allow at most two claims.
+  See [AWS operations](aws-deployment.md).
+- Legacy lens pairing uses a secure random 16-byte capability encoded as 32 hexadecimal
+  characters. Protect it in transfer, local storage, and logs. The lens polls the shared display.
+  A phone-only flow can proceed with the access token alone.
 
 ## Shared HTTP conventions
 
@@ -110,9 +97,9 @@ an API error envelope, so handle it separately and retain the logical request ID
 | `GET /healthz` | None | 200 | Process health |
 | `POST /v1/state` | User | 204 | Register or refresh pairing and phone state |
 | `GET /v1/display?token=...` | Pairing token | 200 | Read latest lens display |
-| `POST /v1/chat` | User | 200 | Generate and publish a response |
-| `POST /v1/images?pairingToken=...` | User | 201 | Upload one image |
-| `DELETE /v1/images/{imageId}?pairingToken=...` | User | 204 | Delete an image |
+| `POST /v1/chat` | User | 200 | Generate a Talk response or publish paired chat |
+| `POST /v1/images` | User | 201 | Upload one image |
+| `DELETE /v1/images/{imageId}` | User | 204 | Delete an image |
 | `POST /v1/task-plans` | User | 201 | Create a structured plan |
 | `GET /v1/task-plans` | User | 200 | List shared approved plans and the user's own plans |
 | `GET /v1/task-plans/{taskPlanId}` | User | 200 | Read current plan and review |
@@ -120,10 +107,12 @@ an API error envelope, so handle it separately and retain the logical request ID
 | `POST /v1/task-plans/{taskPlanId}/validate` | User | 200 | Optional preview review |
 | `POST /v1/task-plans/{taskPlanId}/approve` | User | 200 | Strict review and user approval |
 | `POST /v1/task-runs` | User | 201 | Start an approved plan |
+| `GET /v1/task-runs?status=unfinished` | User | 200 | Restore active and paused runs |
 | `GET /v1/task-runs/{taskRunId}` | User | 200 | Read run state |
 | `POST /v1/task-runs/{taskRunId}/commands` | User | 200 | Apply a user command |
 | `POST /v1/task-runs/{taskRunId}/stop` | User | 200 | Stop a run |
 | `POST /v1/task-runs/{taskRunId}/inference-windows` | User | 202 | Queue visual observation |
+| `GET /v1/task-runs/{taskRunId}/inference-windows/{windowId}` | User | 200 | Read camera status or observation |
 
 There are no delete-plan, conversation-history, image-download, native video, push-display, or account-management routes in this router. Do not infer endpoints from the database or design documents.
 
@@ -157,36 +146,32 @@ Before a response is published, `responseId`, `text`, and `createdAt` can be nul
 
 ### Upload and delete
 
-First register an active pairing. Send `POST /v1/images?pairingToken=<PAIRING_TOKEN>` with the bearer token, `Content-Type: image/jpeg` or `image/png`, and raw file bytes, not JSON, base64, or multipart. The byte signature must match the content type. Images must be nonempty and no larger than 8 MiB. The server does not impose a fixed image count per pairing.
-
-```json
-{"imageId":"<UUID>","contentType":"image/jpeg","byteSize":12345,"createdAt":"<ISO_TIMESTAMP>"}
-```
-
-For example, in a browser or a compatible JavaScript runtime, send `fetch(url, {method: "POST", headers: {Authorization: `Bearer ${accessToken}`, "Content-Type": file.type}, body: file})`. Native apps should send the same raw bytes with the matching content type.
-
-The 201 response is metadata, not an image URL. Keep the `imageId` for chat, frame windows, or deletion. `DELETE /v1/images/<IMAGE_UUID>?pairingToken=<PAIRING_TOKEN>` requires the same owner and active pairing and returns 204. Image metadata and objects expire with the pairing and are subject to asynchronous cleanup; this is not a permanent media library. The managed model receives short-lived signed image URLs, currently valid for 10 minutes. Each frame submitted for task inference has a stricter 2 MiB limit.
+Upload raw JPEG or PNG bytes with a matching `Content-Type` to `POST /v1/images`. Omit scope
+parameters for a private Talk image (8 MiB maximum). Send `taskRunId` for the caller's active run
+(2 MiB maximum), or `pairingToken` for legacy paired media (8 MiB maximum). Use a stable
+`clientImageId` to retry the same bytes in the same scope. The 201 response supplies
+`imageId`, `contentType`, `byteSize`, and `createdAt`. Use the same scope with
+`DELETE /v1/images/<IMAGE_UUID>`. Images are temporary and subject to cleanup.
 
 ### Chat
 
-`POST /v1/chat` accepts the complete conversation to send for this request:
+`POST /v1/chat` accepts phone Talk with a stable request ID and the relevant local transcript.
 
 ```json
 {
-  "pairingToken":"<PAIRING_TOKEN>",
-  "messages":[
-    {"role":"user","content":"What is this?","imageIds":["<IMAGE_UUID>"]},
-    {"role":"assistant","content":"It looks like a cup."},
-    {"role":"user","content":"What color is it?"}
-  ]
+  "clientRequestId":"<UUID>",
+  "messages":[{"role":"user","content":"What tool should I use next?"}],
+  "taskRunId":"<TASK_RUN_UUID>",
+  "expectedStateVersion":1
 }
 ```
 
-`messages` is a nonempty array; roles are `user` or `assistant`; content must be nonblank. `imageIds` is optional, is an array of UUIDs, and may only be attached to user messages. Images must belong to this owner and active pairing. The normalized serialized messages must fit within 256,000 UTF-8 bytes. The API forwards only supplied messages; it does not inject a system prompt or retrieve previous turns. Trim old turns if needed.
-
-Success returns `{"responseId":"r_<ID>","text":"<MODEL_TEXT>","createdAt":"<ISO_TIMESTAMP>"}` and publishes it to the display. Chat sets state to `thinking`, then saves a response; on failure it attempts to return state to `idle`. Because a chat call can result in another generated response on retry, do not assume it is idempotent.
-
-Managed chat defaults to NVIDIA Llama 3.2 90B Vision, falling back to Llama 3.2 11B Vision and then Kimi K3 for the classified provider failures described in [README](../README.md). Authentication, validation, and rate-limit errors do not trigger this fallback. Availability, latency, and deployed model configuration must be verified with the operator.
+Run ID and version are optional together. Add `observationWindowId` to reuse an observed window
+for the same run and version, with its newest frame captured within 10 seconds. An old
+observation returns `409 observation_stale`. Use owner-only Talk images on user messages and
+keep normalized messages within 256,000 UTF-8 bytes. The response includes `responseId`, `text`,
+`createdAt`, and, for run-context calls, `taskRunId` and `stateVersion`. Retry phone chat with the
+original payload and ID. The legacy body uses `pairingToken` and publishes to the lens.
 
 ### Optional user-supplied provider
 
@@ -194,7 +179,7 @@ A request may include `provider`, for example `{"type":"openai","apiKey":"<USER_
 
 ## Task plans: create, review, refine, approve
 
-Plans are separate from device pairings. Any signed-in user can discover, read, and use approved plans. Drafts and plans awaiting approval are visible only to their creator. Approval makes the plan's title, steps, and review available to all signed-in users; the creator's revision history is private. A device pairing is needed only when starting a guided run. Keep the returned IDs and versions. UUID request IDs identify a logical operation: reuse the same ID and same payload for a retry after an uncertain result, and generate a new ID for a new operation. Do not change payloads under a reused ID.
+Plans are separate from device pairings. Any signed-in user can discover, read, and use approved plans. Drafts and plans awaiting approval are visible only to their creator. Approval makes the plan's title, steps, and review available to all signed-in users; the creator's revision history is private. Keep the returned IDs and versions. UUID request IDs identify a logical operation: reuse the same ID and same payload for a retry after an uncertain result, and generate a new ID for a new operation. Do not change payloads under a reused ID.
 
 Unapproved plans expire **two hours after `createdAt`**, including time spent refining them. Editing does not extend the deadline. Show the returned `expiresAt` and warn the user before it arrives. Once expired, an unapproved plan is unavailable even if background cleanup has not yet removed its database row. Cleanup runs in batches while the AWS API process is running; approved plans have `expiresAt: null` and are not deleted by this cleanup. `410 task_plan_expired` can occur when retrying a recently expired creation; create a new plan with a new request ID. Once the old row is deleted, the server no longer retains that request ID, so do not retry it as an old operation.
 
@@ -219,7 +204,7 @@ Send `GET /v1/task-plans?status=approved&limit=50&offset=0` with the Cognito acc
 }
 ```
 
-`isOwner` lets the app identify the user's own plans without exposing another user's identity. If `nextOffset` is a number, request the next page with the same status and limit and that offset. Results are ordered by creation time descending, then plan ID descending. Because this is offset pagination, new or newly approved plans can shift later pages; refresh from offset 0 and deduplicate by `taskPlanId`. To select an item, call `GET /v1/task-plans/<TASK_PLAN_UUID>` for its full steps, review it, and start a run with the user's active `pairingToken`. Do not send a start request for an unapproved plan.
+`isOwner` lets the app identify the user's own plans without exposing another user's identity. If `nextOffset` is a number, request the next page with the same status and limit and that offset. Results are ordered by creation time descending, then plan ID descending. Because this is offset pagination, new or newly approved plans can shift later pages; refresh from offset 0 and deduplicate by `taskPlanId`. To select an item, call `GET /v1/task-plans/<TASK_PLAN_UUID>` for its full steps, review it, and start a phone run with the selected `approvedVersion` as `expectedPlanVersion`. Do not send a start request for an unapproved plan.
 
 ### Create
 
@@ -233,7 +218,7 @@ Send `GET /v1/task-plans?status=approved&limit=50&offset=0` with the Cognito acc
 }
 ```
 
-The title is 1-160 characters after normalization; there must be 1-30 steps, each instruction 1-1,000 characters, with at most 16,000 combined instruction characters. Text is Unicode NFKC normalized, trimmed, and whitespace collapsed. Pairing is not needed to create a plan. For backward compatibility, an optional `pairingToken` is accepted; if supplied it must be active and owned by the caller. Omit it in new clients. Initial free-form plan generation is not implemented. Creation saves the original steps as version 1 and uses the model to produce a draft proposal as version 2. Success is 201 and returns the current plan. Retry a failed creation with the same clientRequestId and identical request. Its fields include `taskPlanId`, `title`, `status`, `currentVersion`, nullable `approvedVersion`, `createdAt`, `updatedAt`, `sourceSteps` with ordinal and instruction, `validationStatus`, nullable `validation`, and `revisionHistory`. Store the returned `taskPlanId`.
+The title is 1-160 characters after normalization; there must be 1-30 steps, each instruction 1-1,000 characters, with at most 16,000 combined instruction characters. Text is Unicode NFKC normalized, trimmed, and whitespace collapsed. Pairing is not needed to create a plan. For backward compatibility, an optional `pairingToken` is accepted; if supplied it must be active and owned by the caller. Omit it in new clients. For phone goal drafting, send `{"clientRequestId":"<UUID>","goal":"Make a paper bookmark"}` instead of this structured form. A goal may contain up to 2,000 characters after normalization. The response is a 201 with a reviewable draft. Structured creation saves the original steps as version 1 and uses the model to produce a draft proposal as version 2. Success is 201 and returns the current plan. Retry a failed creation with the same clientRequestId and identical request. Its fields include `taskPlanId`, `title`, `status`, `currentVersion`, nullable `approvedVersion`, `createdAt`, `updatedAt`, `sourceSteps` with ordinal and instruction, `validationStatus`, nullable `validation`, and `revisionHistory`. Store the returned `taskPlanId`.
 
 Generated and refined `sourceSteps` also include `prechecks`, `postchecks`, `acceptanceCriteria`, `safetyNotes`, `openQuestions`, and `optionalQuestions`, each an array of up to three strings of at most 240 characters. `instruction` is the action. Render the checks and criteria under their step. Before review, treat `openQuestions` as needing review. A review can explicitly classify the same question as optional; otherwise it blocks approval. Step `optionalQuestions` are nonblocking unless the review separately identifies a safety issue or blocker. Checks are suggestions, not assertions that they passed. Older saved plans and the original version 1 can omit these fields, so treat missing arrays as empty. This is additive: existing clients that render only `instruction` remain compatible, but will not show the detailed guidance until updated.
 
@@ -299,41 +284,28 @@ The message is 1-2,000 characters after normalization. The response is the updat
 
 ### Approve
 
-After the user explicitly approves the displayed current version, call `POST /v1/task-plans/<TASK_PLAN_UUID>/approve` with `{}`. The server performs a fresh strict review of the current version and atomically checks it has not changed. Calling validate first is optional. On success, the returned plan has `status: "approved"` and an approved version. A `409 task_plan_guidelines_failed` leaves it editable: fetch the plan, show saved blockers and clarification questions, refine, and ask the user to approve again. Other conflicts include stale plan and non-approvable state. Approval is not a model-only action; do not invoke it without a deliberate user action. See [approval guidelines](task-plan-approval-guidelines.md).
+After the user explicitly approves the displayed current version, call `POST /v1/task-plans/<TASK_PLAN_UUID>/approve` with `{"expectedVersion":2,"clientRequestId":"<UUID>"}`. The server performs a strict review of that version and atomically checks it has not changed. Legacy clients may send `{}` to review the current version. Calling validate first is optional. On success, the returned plan has `status: "approved"` and an approved version. A `409 task_plan_guidelines_failed` leaves it editable: fetch the plan, show saved blockers and clarification questions, refine, and ask the user to approve again. Other conflicts include stale plan and non-approvable state. Approval is not a model-only action; do not invoke it without a deliberate user action. See [approval guidelines](task-plan-approval-guidelines.md).
 
 ## Task runs and visual guidance
 
 ### Start and read
 
-`POST /v1/task-runs` requires an approved plan and an active pairing:
+Start a phone run with the exact approved version.
 
 ```json
-{"taskPlanId":"<TASK_PLAN_UUID>","clientRequestId":"<UUID>","pairingToken":"<PAIRING_TOKEN>"}
+{"taskPlanId":"<TASK_PLAN_UUID>","clientRequestId":"<UUID>","expectedPlanVersion":2}
 ```
 
-The `pairingToken` is the selecting user's currently active device pairing. Any signed-in user may start an approved shared plan with their own pairing. Different users may run the same plan concurrently; the same user can have only one active or paused run of a given plan version. Reusing a request ID with a different plan or pairing returns `409 task_run_idempotency_conflict`; a separate active run returns `409 task_run_already_active`. Legacy clients can omit the token only when using their own plan's original active pairing; new clients should always send it.
+The 201 response includes the IDs, `planVersion`, `status`, `currentStepOrdinal`,
+`currentStepStatus`, `stateVersion`, `latestSequenceNumber`, `lensInstruction`, and timestamps.
+Restore active and paused runs with `GET /v1/task-runs?status=unfinished` and inspect one with
+`GET /v1/task-runs/<TASK_RUN_UUID>`. To switch, include
+`activeRun: {"taskRunId":"<ACTIVE_UUID>","expectedStateVersion":1}` in the start or resume
+request to pause that active run atomically. Reload unfinished runs after an active-run conflict.
 
-The 201 response includes `taskRunId`, `taskPlanId`, `planVersion`, `status`, `currentStepOrdinal`, `stateVersion`, and `lensInstruction`. The server publishes the first instruction to display. Wait for a successful start before capturing guidance frames. `GET /v1/task-runs/<TASK_RUN_UUID>` returns these fields plus `currentStepStatus`, timestamps, and nullable `stoppedAt`. Runs can be `active`, `paused`, `completed`, or `stopped`. An expired run pairing can make the run unavailable.
-
-A representative start response is:
-
-```json
-{
-  "taskRunId":"33333333-3333-4333-8333-333333333333",
-  "taskPlanId":"11111111-1111-4111-8111-111111111111",
-  "planVersion":2,
-  "status":"active",
-  "currentStepOrdinal":1,
-  "stateVersion":1,
-  "createdAt":"2026-01-01T12:01:00.000Z",
-  "lensInstruction":"Place the cup on the table."
-}
-```
-
-Keep `taskRunId`, `planVersion`, and `stateVersion`. `currentStepOrdinal` is one-based. The
-initial instruction is also published through the pairing display. Starting a run returns
-`409 task_run_not_ready` when the plan is not approved or the pairing is unavailable. A retry of
-the same logical start must reuse its original `clientRequestId` and `taskPlanId`.
+Legacy paired starts supply the caller's active `pairingToken` and publish to the lens.
+A legacy start without a plan version or pairing uses the original owned active pairing when
+available. Retry a start using the exact original payload and request ID.
 
 ### Commands and concurrency
 
@@ -367,15 +339,20 @@ Approval stores a particular plan version. Starting it creates a separate run at
 
 An inference window is an asynchronous observation, not a video stream. The worker sends the current step's instruction, its approved review's `visualAcceptanceCriteria`, and the submitted images to the vision model. The model returns a summary, frame indexes, confidence, and one proposed result: `remain_in_progress`, `candidate_complete`, or `blocked`. The backend validates that response and stores it, but it does **not** change the run's step, status, or `stateVersion`. If the run state changed while inference was in flight, the stale result cannot update the display. A successful current observation publishes the current instruction, a request to confirm possible completion, or a camera-correction prompt to the shared display. The phone can recognize a published result by `responseId: "task_observation_<inferenceWindowId>"`.
 
-The client cannot currently fetch an observation's summary, confidence, evidence, or final worker status through an API. A `202` means queued, not that inference succeeded or a step passed. A missing display update can mean the result is still pending, failed, or became stale. Do not infer completion from a frame or from `202`: ask the user to confirm, then send the `confirm` command. The model's camera-based assessment may be wrong and cannot establish checks that are not visible.
+Read the result through the camera window endpoint. Ask the user to confirm completion.
+Observations describe visible evidence and can be wrong.
 
 ### Talking during guidance
 
-The user can speak while the phone captures frames, but this backend does not receive audio in inference windows, transcribe speech, stream microphone audio, or synthesize speech. The app must handle microphone capture and speech recognition itself if it wants voice interaction. It can submit recognized text through `POST /v1/chat`, using the normal chat request and active pairing; that is a separate request and does not attach the transcript to the current inference window or change task-run state. Chat and task guidance both publish to the same latest-display slot, so one can overwrite the other's display message. Coordinate and show these messages carefully in the app. If the app maps a spoken instruction to a run command, send the normal command with the current `stateVersion`; do not treat speech recognition or a chat response as automatic confirmation.
+Submit recognized speech as Talk text with the current run and version for an explanation about
+the step. For a camera question, submit the question and fresh frames together in one window.
+A spoken command goes through the same concurrency checks as a tapped command.
 
 ### Submit an inference window
 
-Upload 1-3 distinct JPEG or PNG images through the image endpoint for the run's pairing; each must be at most 2 MiB. Record each actual capture time as canonical UTC ISO 8601 with milliseconds, such as `2026-11-10T12:00:00.000Z`. Submit frames in strictly increasing capture-time order. At request validation, capture times must be no more than 30 seconds old and no more than 5 seconds in the future. Keep device clocks synchronized.
+Upload 1-3 distinct run-scoped JPEG or PNG frames, up to 2 MiB each. Capture times must be
+strictly increasing canonical UTC timestamps with milliseconds. For a new window, the server
+accepts captures from 30 seconds before to 5 seconds after server time.
 
 `POST /v1/task-runs/<TASK_RUN_UUID>/inference-windows`:
 
@@ -388,57 +365,15 @@ Upload 1-3 distinct JPEG or PNG images through the image endpoint for the run's 
 }
 ```
 
-Use a positive, increasing sequence number for each new window and the run state version observed when capturing. Success is 202, for example `{"outcome":"accepted","inferenceWindowId":"<UUID>","sequenceNumber":1,"status":"queued","stateVersion":1,"createdAt":"<ISO_TIMESTAMP>"}`. It means queued, not observed or complete. In the AWS implementation the worker processes queued windows asynchronously and may publish a display prompt. No public endpoint in this router retrieves an individual window or observation; poll display and read run state as needed. An observation does not advance, confirm, skip, or stop the task. Old-state or out-of-order windows are rejected. Model calls can fail or be discarded, so do not promise a display update for every accepted window.
+Use the run's `latestSequenceNumber + 1` and the state version at capture. Include an optional
+`question` of up to 500 characters. A 202 returns the window ID and its status. Retain the original
+payload for retries, including capture times. Phone runs accept one pending window at a time.
 
-### When the app should send frames: initial pilot policy
-
-The backend does not choose capture times or send a capture trigger to the app. Use this **proposed
-starting policy**, subject to testing on the actual device and AWS environment. The timings below
-are product defaults for an early, single-user pilot, not guarantees or limits imposed by the API.
-
-1. Ask the user for camera permission and an explicit start to visual guidance. Wait until
-   `POST /v1/task-runs` succeeds. Do not upload camera frames while reviewing a plan.
-2. While the run is `active` and the camera view is usable, capture one fresh JPEG or PNG frame.
-   Record the actual UTC capture timestamp and the run's latest `stateVersion`. Upload it and
-   submit a window containing that image ID. Start with a single frame to limit latency and data.
-3. Begin with a minimum **four-second interval between window submissions**, measured by a
-   monotonic device clock. Keep at most one upload or submission request in flight. Drop frames
-   locally instead of queuing them if a request is still running, connectivity is poor, the view
-   is obscured, or the app is backgrounded. Do not send a burst to catch up later.
-4. Because `202` means only queued, use the returned `inferenceWindowId` to look for a display
-   update whose `responseId` is `task_observation_<inferenceWindowId>`. Treat a match as evidence
-   that this particular observation reached the display; it is not a user confirmation. For this
-   conservative pilot, do not submit another window until the match is seen and the four-second
-   minimum has elapsed.
-5. If no matching display update is observed within **20 seconds**, stop automatic submissions and
-   show a recoverable status such as “Visual guidance is taking longer than expected.” Let the user
-   retry or continue using task commands. This timeout is a UI limit, not evidence that the backend
-   stopped processing. A later display update may still arrive. A shared display can be overwritten
-   by chat or another update, so a missing match does not prove the window failed.
-6. On a pause or stop action, stop capturing immediately. Resume only after the server confirms the
-   run is active and the app has its current state version. Every accepted command, including
-   `repeat`, changes `stateVersion`; discard captured but unsubmitted frames whenever the version
-   changes. For an unknown command outcome or `task_run_stale`, read the run before resuming.
-   If the previous window has no matching display update, pause automatic submissions and let the
-   user decide whether to retry; the earlier window may still be processed or discarded.
-7. After an accepted step transition, capture a new frame for the newly current step when the
-   preceding conditions for submission are satisfied. Do not reuse
-   frames from the previous step or send a frame that has aged beyond the API's 30-second limit.
-   On stop, completion, sign-out, or permission withdrawal, stop the camera and clear local queued
-   frames. Delete uploaded images through the image endpoint when no longer needed and practical.
-
-If a single frame proves insufficient for an action that changes over time, the app may submit up
-to three **distinct** frames captured in order within one window. Do not synthesize timestamps or
-repeat an image ID. Evaluate this separately because every additional frame adds upload and model
-cost. The worker's two-second queue check is an internal scheduling detail, not a recommended client
-cadence or maximum processing time.
-
-The display endpoint is a single latest-value channel, not an observation queue. There is no public
-window-status endpoint, failure callback, or cancellation of a queued window. Therefore the app
-cannot prove that the worker has finished when no matching display update appears, and this policy
-cannot guarantee zero backend backlog. Before expanding beyond a small pilot, measure capture and
-upload latency, frame freshness, observation latency and failures, battery, bandwidth, and model
-cost; coordinate cadence and queue limits with the backend owner.
+Poll `GET /v1/task-runs/<TASK_RUN_UUID>/inference-windows/<WINDOW_UUID>` until `observed` or
+`rejected`, with a client-side deadline. Terminal results include an `observation` or safe
+`errorCode` respectively. Compare the
+observed state version with current state before showing evidence. Stop capturing when the user
+pauses or leaves Guide.
 
 ## Error handling by operation
 
@@ -449,7 +384,7 @@ pairing capabilities, request bodies, images, or provider credentials.
 
 | Condition or code | Meaning and frontend action |
 | --- | --- |
-| `401 unauthorized` or `auth_rejected` | User token is missing, expired, invalid, or issued to a client the backend does not accept. Refresh or sign in; if a fresh Glanss token fails, give support the request ID. |
+| `401 unauthorized` or `auth_rejected` | User token is missing, expired, invalid, or issued to a client the backend does not accept. Refresh or sign in; if a fresh access token fails, give support the request ID. |
 | `401 unauthorized` on pairing-dependent work or display | The message can instead indicate an unknown or expired pairing. Re-register or re-pair as appropriate. |
 | `403 forbidden` | The active pairing belongs to another user. Do not reuse another user's token. |
 | `404 not_found`, `task_plan_not_found`, `task_run_not_found` | The resource or active pairing is unavailable to this user. Refresh app state and re-pair if needed. |
@@ -462,8 +397,11 @@ pairing capabilities, request bodies, images, or provider credentials.
 | `410 task_plan_expired` | The unapproved draft passed its two-hour lifetime. Create a new plan with a new request ID. |
 | `409 task_plan_not_draft`, `task_plan_not_refinable`, `task_plan_not_approvable`, `task_plan_has_runs`, `task_plan_revision_limit` | The requested plan operation is unavailable in its current lifecycle. Fetch and display the current state. |
 | `409 task_run_not_ready`, `task_run_invalid_transition`, `task_run_not_active` | Check plan approval, pairing, and current run state; do not blindly replay a command. |
+| `409 task_run_active_conflict`, `task_run_plan_stale` | Reload unfinished runs or the approved plan before asking for a fresh decision. |
+| `409 request_in_progress` | Retry the original payload after allowing the current attempt to finish. |
+| `409 window_in_flight`, `observation_stale` | Poll the existing window or capture fresh evidence for a new request. |
 | `409 task_run_stale` | Read the run; the optional `error.context.state_version` may help, but use the full current state for the UI. |
-| `409 window_out_of_order`, `422 window_media_invalid` | Use a higher sequence for a new window and valid, recent images from the same active pairing. |
+| `409 window_out_of_order`, `422 window_media_invalid` | Use the current run's sequence and valid, recent images from its scope. |
 | `429 rate_limited`, `model_rate_limited`, `provider_rate_limited`, `task_run_command_limit` | Model rate limits may be transient; the command limit is a per-run cap and waiting alone does not reset it. |
 | `503 plan_creation_unavailable`, `plan_creation_invalid_response` | Keep the same create payload and UUID for retry. A draft may already have been saved. |
 | `503 plan_refinement_unavailable`, `plan_refinement_invalid_response` | Show the error; retry the same intended revision with its original UUID and payload when appropriate. |
@@ -478,12 +416,11 @@ non-transient failures. Do not silently retry a user confirmation after a state 
 
 ## Suggested frontend sequence
 
-1. Obtain the confirmed environment configuration, sign in, and keep access tokens refreshed using the configured identity provider.
-2. Generate and securely exchange a pairing token with the lens. Call state and begin display polling. Keep the pairing alive with phone activity.
-3. For chat, capture and upload an image if needed, maintain local message history, call chat, and show or speak the returned text. Release images when no longer needed.
-4. For guidance, create a structured plan, render the source and review, refine as requested, and obtain explicit approval. Start the run only after approval.
-5. Keep the latest plan version and run state version. Record a stable ID per logical command or window. For visual guidance, upload bounded frames and queue windows, while the lens polls display.
-6. Let the user pause, confirm, skip, go back, or stop. On stale state, refresh before another user decision. Stop capture when the run ends or pairing expires.
+1. Sign in with the target Cognito configuration and restore unfinished runs.
+2. Send a goal. Show the resulting steps and questions, refine if needed, then approve the exact reviewed version.
+3. Start or resume Guide. Keep the latest step and state version. Keep each logical command's request ID for retries.
+4. Ask Talk about a step or capture a bounded camera check.
+5. On stale state, read the run and request a fresh user decision. Stop the run and capture when the user is finished.
 
 ## Setup, operations, and verification
 
@@ -501,7 +438,16 @@ used. Do not copy a populated environment file into Git or a frontend bundle.
 For local work, prerequisites and commands are in [local development](local-development.md). The
 repository does not provide a fully local AWS stack.
 
-Repository checks and pinned Deno commands are listed in [local development](local-development.md). The canonical request collection is the separate [MetaGlasses Postman repository](https://github.com/Adipat2003/metaglasses-postman). Verify its revision matches the deployed backend before treating it as the live contract. The dedicated `scripts/smoke-task-guidance-api.sh` exercises Cognito, pairing, plan review, run, image, observation, and stop against a configured environment. It requires a dedicated test account and pairing, incurs model calls, changes the display, and creates audit records; read the script before running it. Use request IDs and structured logs for diagnosis. Confirm deployment and recovery using the operational guide rather than assuming a successful code push deployed the change.
+Use the pinned Deno checks in [local development](local-development.md), plus
+`bash scripts/test-task-plan-library-db.sh`, `npm test --prefix frontend-sdk`, and
+`node scripts/check-frontend-sdk-package.mjs`. The canonical
+[MetaGlasses Postman repository](https://github.com/Adipat2003/metaglasses-postman) receives its
+contract sync PR after backend CI passes on `main`. Test the **Phone workflow** folder in Postman
+Local View using the matching staging deployment, a dedicated account, and inherited OAuth. Follow
+the numbered requests through draft review, run start, Talk, replay, stale rejection, resume,
+optional camera polling, and stop. Run the Python route checks and Node script tests offline.
+The legacy `scripts/smoke-task-guidance-api.sh` requires a dedicated pairing and makes live
+model calls.
 
 ## Known integration decisions still needed
 

@@ -37,11 +37,17 @@ retry prerequisites. The SDK checks local input constraints before sending reque
 can change on the server, such as whether a plan is approved or a run is still active, remains a
 server decision and is returned as an `ApiRequestError` with its status and machine-readable code.
 
-Typical flows use `setPairingState` to register the phone pairing, `createChatResponse` for a
-conversation, or `uploadPairingImage` before attaching the returned image ID to a user message.
-Task guidance uses `createTaskPlan`, `validateTaskPlan`, `approveTaskPlan`, and `startTaskRun` in
-that order. Read the run with `getTaskRun` before applying `commandTaskRun` or submitting an
-inference window, and use its latest `stateVersion`.
+For phone guidance, pass a `goal` and stable `clientRequestId` to `createTaskPlan`.
+After reviewing the draft, call `approveTaskPlan` with `expectedVersion` and a request ID.
+Pass the approved version as `expectedPlanVersion` to `startTaskRun`. Use
+`listUnfinishedTaskRuns` to restore active and paused runs. Commands use the latest
+`stateVersion`; preserve the original ID and body for each uncertain retry.
+
+`createChatResponse` accepts owner-scoped Talk chat with a request ID and optional run
+context. `uploadImage` stores a Talk image unless you pass a `taskRunId`. To check camera
+frames, upload them to the active run, call `submitInferenceWindow`, and poll
+`getInferenceWindow` for its result. Lens clients can still use `setPairingState` and
+`uploadPairingImage`.
 
 `ApiTransportError` represents a network failure or timeout. `ApiProtocolError` means the server
 returned success with a non-JSON body. API failures expose `status`, `code`, `requestId`, and safe
