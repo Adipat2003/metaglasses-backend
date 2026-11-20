@@ -153,10 +153,9 @@ access tokens and HTTPS. The current API allows all CORS origins; CORS is not au
 
 ## Cross-repository Postman contract sync
 
-`Adipat2003/metaglasses-postman` is the canonical Postman workspace. After CI succeeds on a
-`main` push,
-the backend dispatches that exact commit to the Postman repository through the configured
-Postman-sync GitHub App. Its sync workflow automatically opens or updates a PR there; it never
+`Adipat2003/metaglasses-postman` is the canonical Postman workspace. After `main` CI succeeds
+and AWS verifies that the same commit is healthy, the backend dispatches that SHA and both
+workflow run URLs through the Postman sync GitHub App. Its sync workflow automatically opens or updates a PR there; it never
 pushes Postman changes directly to `main`.
 
 When creating a backend PR that changes routes, HTTP methods, authentication, request or response

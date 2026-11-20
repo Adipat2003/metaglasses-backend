@@ -10,12 +10,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: frontend-sdk-publish-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  group: frontend-sdk-main-publish
+  queue: max
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.ref == 'refs/heads/main' &&
+      github.sha == github.event.workflow_run.head_sha
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -27,6 +33,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -42,10 +49,10 @@ jobs:
 
       - name: Regenerate and validate SDK
         run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           npm run generate --prefix frontend-sdk
           git diff --exit-code -- frontend-sdk/api-types.d.ts
           npm test --prefix frontend-sdk
-          node scripts/check-frontend-sdk-package.mjs
 
       - name: Set unique main build version
         env:
@@ -53,27 +60,40 @@ jobs:
         id: sdk_version
         run: |
           VERSION=$(node -e '
-            const [major, minor, patch] = require("./frontend-sdk/package.json").version.split(".");
-            if (![major, minor, patch].every((part) => /^\d+$/.test(part))) {
+            const version = require("./frontend-sdk/package.json").version;
+            if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
               throw new Error("frontend-sdk/package.json must use a stable major.minor.patch version");
             }
+            const [major, minor] = version.split(".");
             console.log(`${major}.${minor}.${process.env.CI_RUN_NUMBER}`);
           ')
-          npm version "$VERSION" --no-git-tag-version --prefix frontend-sdk
+          npm version "$VERSION" --allow-same-version --no-git-tag-version --prefix frontend-sdk
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Check whether this version was already published
-        id: published
+      - name: Check final SDK package contents
+        run: node scripts/check-frontend-sdk-package.mjs
+
+      - name: Check whether this version advances npm latest
+        id: release
         env:
           VERSION: ${{ steps.sdk_version.outputs.value }}
         run: |
-          if npm view "metaglasses-sdk@$VERSION" version >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
+          latest=$(npm view metaglasses-sdk@latest version --json --prefer-online --fetch-retries=0 --fetch-timeout=10000)
+          LATEST="$latest" node -e '
+            const parse = (version) => {
+              if (typeof version !== "string" ||
+                !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+                throw new Error("Expected a stable SDK version");
+              }
+              return version.split(".").map(BigInt);
+            };
+            const version = parse(process.env.VERSION);
+            const current = parse(JSON.parse(process.env.LATEST));
+            const difference = version.findIndex((part, index) => part !== current[index]);
+            console.log(`publish=${difference >= 0 && version[difference] > current[difference]}`);
+          ' >> "$GITHUB_OUTPUT"
 
       - name: Publish public package with provenance
-        if: steps.published.outputs.exists != 'true'
+        if: steps.release.outputs.publish == 'true'
         working-directory: frontend-sdk
         run: npm publish --access public --provenance --tag latest

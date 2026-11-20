@@ -1,42 +1,150 @@
 name: Deploy AWS API
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
     branches: [main]
+    types: [completed]
 
 permissions:
   contents: read
-  id-token: write
+
+concurrency:
+  group: aws-api-main-deploy
+  queue: max
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
     env:
       AWS_REGION: us-east-1
       COMPUTE_STACK: metaglasses-compute
+      BACKEND_SHA: ${{ github.event.workflow_run.head_sha }}
+    outputs:
+      verified_sha: ${{ steps.deploy.outputs.verified_sha }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: aws-actions/configure-aws-credentials@00943011d9042930efac3dcd3a170e4273319bc8 # v5.1.0
+      - name: Check whether the validated SHA is still main
+        id: main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          main_sha=$(timeout 20s gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [[ ! "$main_sha" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "::error::GitHub did not return a valid main commit SHA."
+            exit 1
+          fi
+          if [[ "$BACKEND_SHA" == "$main_sha" ]]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Skipping superseded backend revision $BACKEND_SHA (main is $main_sha)."
+          fi
+
+      - name: Check out validated main commit
+        if: steps.main.outputs.current == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BACKEND_SHA }}
+          persist-credentials: false
+
+      - if: steps.main.outputs.current == 'true'
+        uses: aws-actions/configure-aws-credentials@00943011d9042930efac3dcd3a170e4273319bc8 # v5.1.0
         with:
           role-to-assume: ${{ vars.METAGLASSES_AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
       - id: stack
+        if: steps.main.outputs.current == 'true'
         run: |
           outputs=$(aws cloudformation describe-stacks --stack-name "$COMPUTE_STACK" --query 'Stacks[0].Outputs' --output json)
           echo "repository=$(jq -r '.[] | select(.OutputKey == "ApiRepositoryUri") | .OutputValue' <<<"$outputs")" >> "$GITHUB_OUTPUT"
           echo "instance=$(jq -r '.[] | select(.OutputKey == "ApiInstanceId") | .OutputValue' <<<"$outputs")" >> "$GITHUB_OUTPUT"
           echo "registry=$(jq -r '.[] | select(.OutputKey == "ApiRepositoryUri") | .OutputValue' <<<"$outputs" | cut -d/ -f1)" >> "$GITHUB_OUTPUT"
-      - run: |
-          aws ecr get-login-password | docker login --username AWS --password-stdin "${{ steps.stack.outputs.registry }}"
-          docker build --tag "${{ steps.stack.outputs.repository }}:${GITHUB_SHA}" .
-          docker push "${{ steps.stack.outputs.repository }}:${GITHUB_SHA}"
-      - run: |
-          command_id=$(aws ssm send-command --instance-ids "${{ steps.stack.outputs.instance }}" --document-name AWS-RunShellScript \
-            --parameters "commands=[\"set -eu\",\"aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin ${{ steps.stack.outputs.registry }}\",\"docker pull ${{ steps.stack.outputs.repository }}:$GITHUB_SHA\",\"docker run --rm --env-file /opt/metaglasses/runtime.env ${{ steps.stack.outputs.repository }}:$GITHUB_SHA run --allow-env --allow-net --allow-read backend/migrate.ts\",\"printf '%s' '${{ steps.stack.outputs.repository }}:$GITHUB_SHA' >/opt/metaglasses/image\",\"docker rm -f metaglasses-api || true\",\"docker run -d --name metaglasses-api --restart unless-stopped --env-file /opt/metaglasses/runtime.env -p 8000:8000 ${{ steps.stack.outputs.repository }}:$GITHUB_SHA\",\"for attempt in 1 2 3 4 5; do curl --fail --silent --show-error http://127.0.0.1:8000/healthz && exit 0; sleep 2; done; docker logs metaglasses-api; exit 1\"]" --query 'Command.CommandId' --output text)
-          if ! aws ssm wait command-executed --command-id "$command_id" --instance-id "${{ steps.stack.outputs.instance }}"; then
-            aws ssm get-command-invocation --command-id "$command_id" --instance-id "${{ steps.stack.outputs.instance }}"
+
+      - name: Build or reuse the immutable commit image
+        if: steps.main.outputs.current == 'true'
+        env:
+          REPOSITORY: ${{ steps.stack.outputs.repository }}
+          REGISTRY: ${{ steps.stack.outputs.registry }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$BACKEND_SHA"
+          image="$REPOSITORY:$BACKEND_SHA"
+          lookup=$(aws ecr batch-get-image --repository-name "${REPOSITORY#*/}" --image-ids "imageTag=$BACKEND_SHA" --output json)
+          if jq -e '.images | length == 1' <<<"$lookup" >/dev/null; then
+            echo "Reusing existing immutable image $image"
+            exit 0
+          fi
+          jq -e '.failures | length == 1 and .[0].failureCode == "ImageNotFound"' <<<"$lookup" >/dev/null
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
+          docker build --tag "$image" .
+          docker push "$image"
+
+      - name: Deploy and verify the commit image
+        id: deploy
+        if: steps.main.outputs.current == 'true'
+        env:
+          INSTANCE: ${{ steps.stack.outputs.instance }}
+          REGISTRY: ${{ steps.stack.outputs.registry }}
+          REPOSITORY: ${{ steps.stack.outputs.repository }}
+        run: |
+          deployment=$(cat <<EOF
+          set -eu
+          image='$REPOSITORY:$BACKEND_SHA'
+          healthy() {
+            running_image=\$(docker inspect --format '{{if .State.Running}}{{.Config.Image}}{{end}}' metaglasses-api 2>/dev/null) &&
+              [ "\$running_image" = "\$image" ] &&
+              curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8000/healthz
+          }
+          if ! healthy; then
+            aws ecr get-login-password --region '$AWS_REGION' | docker login --username AWS --password-stdin '$REGISTRY'
+            docker pull "\$image"
+            docker run --rm --env-file /opt/metaglasses/runtime.env "\$image" run --allow-env --allow-net --allow-read backend/migrate.ts
+            docker rm -f metaglasses-api || true
+            docker run -d --name metaglasses-api --restart unless-stopped --env-file /opt/metaglasses/runtime.env -p 8000:8000 "\$image"
+            for attempt in 1 2 3 4 5; do
+              if healthy; then
+                break
+              fi
+              if [ "\$attempt" = 5 ]; then
+                docker logs --tail 20 metaglasses-api
+                exit 1
+              fi
+              sleep 2
+            done
+          fi
+          printf '%s' "\$image" >/opt/metaglasses/image
+          EOF
+          )
+          parameters=$(jq -nc --arg script "$deployment" '{commands: [$script]}')
+          command_id=$(aws ssm send-command --instance-ids "$INSTANCE" --document-name AWS-RunShellScript \
+            --parameters "$parameters" --query 'Command.CommandId' --output text)
+          if ! aws ssm wait command-executed --command-id "$command_id" --instance-id "$INSTANCE"; then
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE"
             exit 1
           fi
-          aws ssm get-command-invocation --command-id "$command_id" --instance-id "${{ steps.stack.outputs.instance }}" \
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE" \
             --query '{status:Status,stdout:StandardOutputContent,stderr:StandardErrorContent}'
+          echo "verified_sha=$BACKEND_SHA" >> "$GITHUB_OUTPUT"
+
+  notify-postman:
+    needs: deploy
+    if: needs.deploy.outputs.verified_sha != ''
+    uses: ./.github/workflows/notify-postman-contract.yml
+    with:
+      backend_sha: ${{ needs.deploy.outputs.verified_sha }}
+      source_run_url: ${{ github.event.workflow_run.html_url }}
+    secrets:
+      postman_sync_app_private_key: ${{ secrets.POSTMAN_SYNC_APP_PRIVATE_KEY }}

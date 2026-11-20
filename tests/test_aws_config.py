@@ -304,7 +304,7 @@ def test_task_plan_api_uses_a_fixed_bedrock_validator_and_separate_migrator() ->
     assert "grant execute on function app.approve_task_plan_with_review" in approval_migration
     assert "DATABASE_MIGRATOR_USER=metaglasses_migrator" in template
     assert "backend/migrate.ts" in workflow
-    assert "backend/api/task_plan_test.ts" in ci_workflow
+    assert "backend/api/\n" in ci_workflow
     assert "bash -n scripts/smoke-task-guidance-api.sh" in ci_workflow
 
 
@@ -315,20 +315,6 @@ def test_task_guidance_smoke_test_requires_explicit_confirmation() -> None:
     assert "/v1/task-plans" in smoke_test
     assert "/inference-windows" in smoke_test
     assert "/stop" in smoke_test
-
-
-def test_successful_main_ci_always_dispatches_postman_contract_check() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "notify-postman-contract.yml").read_text(
-        encoding="utf-8"
-    )
-
-    assert "workflow_run:" in workflow
-    assert "workflows: [CI]" in workflow
-    assert "branches: [main]" in workflow
-    assert "github.event.workflow_run.conclusion == 'success'" in workflow
-    assert 'github.event.workflow_run.event == \'push\'' in workflow
-    assert "Dispatch canonical Postman sync" in workflow
-    assert "Detect Edge API contract source changes" not in workflow
 
 
 def test_api_container_allows_the_sdk_to_read_the_os_release() -> None:
