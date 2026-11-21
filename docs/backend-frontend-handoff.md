@@ -15,7 +15,7 @@ should prefer the [frontend SDK](../frontend-sdk/README.md) for named calls and 
 
 ## Frontend authentication configuration
 
-Glance uses the Cognito native SRP public client. Configure the target user pool and client from
+Glanss uses the Cognito native SRP public client. Configure the target user pool and client from
 the environment's auth stack. Use Cognito for sign-in, verification, recovery, and refresh, and
 store session credentials in platform-protected storage. Protected API routes require the current
 **access token** in the bearer header.
@@ -441,7 +441,7 @@ repository does not provide a fully local AWS stack.
 Use the pinned Deno checks in [local development](local-development.md), plus
 `bash scripts/test-task-plan-library-db.sh`, `npm test --prefix frontend-sdk`, and
 `node scripts/check-frontend-sdk-package.mjs`. The canonical
-[MetaGlasses Postman repository](https://github.com/Adipat2003/metaglasses-postman) receives its
+[Glanss Postman repository](https://github.com/Adipat2003/metaglasses-postman) receives its
 contract sync PR after backend CI passes on `main`. Test the **Phone workflow** folder in Postman
 Local View using the matching staging deployment, a dedicated account, and inherited OAuth. Follow
 the numbered requests through draft review, run start, Talk, replay, stale rejection, resume,

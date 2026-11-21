@@ -1,8 +1,8 @@
-# MetaGlasses backend
+# Glanss backend
 
 [![CI](https://github.com/Adipat2003/metaglasses-backend/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Adipat2003/metaglasses-backend/actions/workflows/ci.yml)
 
-The hosted MetaGlasses API runs as a single routed HTTP service on AWS. Its Deno source remains
+The hosted Glanss API runs as a single routed HTTP service on AWS. Its Deno source remains
 under `backend/`. AWS EC2 is the application runtime;
 Cognito, RDS, and S3 provide authentication, data, and image storage.
 
@@ -134,7 +134,7 @@ refinement, approval, request IDs, and errors.
 
 ## Postman
 
-The canonical MetaGlasses Postman collection and environments live in the separate
+The canonical Glanss Postman collection and environments live in the separate
 [`Adipat2003/metaglasses-postman`](https://github.com/Adipat2003/metaglasses-postman) repository.
 Use that repository to import the collection and duplicate the selected environment before adding
 test-user credentials. Do not commit populated environments here.

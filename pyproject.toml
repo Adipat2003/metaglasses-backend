@@ -1,7 +1,7 @@
 [project]
 name = "metaglasses-backend"
 version = "0.1.0"
-description = "AWS-hosted Deno API for MetaGlasses."
+description = "AWS-hosted Deno API for Glanss."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []

@@ -1,6 +1,6 @@
 # AWS deployment and operations
 
-MetaGlasses uses one AWS environment in `us-east-1`. AWS database and Cognito resources were
+Glanss uses one AWS environment in `us-east-1`. AWS database and Cognito resources were
 created without migrating application data from the previous provider. Check current state directly
 in AWS; initial conditions do not describe current data or user counts.
 
@@ -158,7 +158,7 @@ a normal safe error response. Local development retains the five-minute provider
 1. Open **CloudFormation**, choose `metaglasses-public-api`, then select **Outputs** for the URL.
 2. Open **API Gateway**, choose the HTTP API, then **Stages** and `$default` to inspect access-log
    configuration.
-3. Open **EC2**, choose **Load Balancers**, select the internal MetaGlasses ALB, then inspect the
+3. Open **EC2**, choose **Load Balancers**, select the internal API load balancer, then inspect the
    **Target groups** tab. The EC2 target must be `healthy`.
 4. Open **CloudWatch**, choose **Log groups**, and open the `metaglasses-public-api-HttpApiAccessLogs-*`
    group to view API status and latency records. Request bodies, authorization headers, and query

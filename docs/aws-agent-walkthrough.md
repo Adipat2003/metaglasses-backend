@@ -1,6 +1,6 @@
-# MetaGlasses AWS walkthrough for an agent
+# Glanss AWS walkthrough for an agent
 
-Give this document to an agent working with a teammate who wants to understand the MetaGlasses AWS
+Give this document to an agent working with a teammate who wants to understand the Glanss AWS
 environment. The agent's job is to walk through the system in order, explain what each component
 does in plain language, and verify live state without changing it.
 
@@ -140,7 +140,7 @@ aws cloudformation describe-stacks \
 
 Explain:
 
-- `UserPoolId`: Cognito directory for MetaGlasses users.
+- `UserPoolId`: Cognito directory for Glanss users.
 - `MobileAppClientId`: legacy SRP client identifier for the mobile application. It is not a user secret.
 - `OAuthMobileAppClientId`: OAuth PKCE client identifier for the Glanss mobile callback.
 - `PostmanOAuthAppClientId`: OAuth PKCE client identifier for Postman browser testing.
@@ -442,7 +442,7 @@ Use this change protocol:
 
 ## Suggested first prompt for the receiving agent
 
-> Read `docs/aws-agent-walkthrough.md` first. Walk me through the MetaGlasses AWS environment in
+> Read `docs/aws-agent-walkthrough.md` first. Walk me through the Glanss AWS environment in
 > order, starting read-only. At each section, explain the service in plain language, show the safe
 > command you intend to run, summarize the result, and wait for me before moving to the next major
 > section. Never retrieve or print secret values, and do not make changes without my explicit
