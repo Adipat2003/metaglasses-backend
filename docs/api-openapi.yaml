@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: MetaGlasses AWS API
+  title: Glanss AWS API
   version: 1.0.0
   description: |
     AWS backend HTTP endpoints. Phone operations require an accepted Cognito access token;

@@ -1,7 +1,7 @@
 {
   "name": "metaglasses-sdk",
   "version": "0.1.0",
-  "description": "Typed frontend client for the MetaGlasses API",
+  "description": "Typed frontend client for the Glanss API",
   "type": "module",
   "types": "./dist/client.d.ts",
   "exports": {

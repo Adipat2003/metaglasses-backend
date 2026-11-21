@@ -1,4 +1,4 @@
-# MetaGlasses SDK
+# Glanss SDK
 
 The API origin is supplied by the app at runtime. The SDK has no baked-in backend address and
 does not read environment variables or persist credentials.
